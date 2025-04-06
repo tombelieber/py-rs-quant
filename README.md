@@ -158,26 +158,41 @@ trading-sim simulate --duration 30 --symbols BTCUSD --no-use-rust
 
 Sample output:
 ```
-2025-04-07 02:44:54,076 - trading_simulator - INFO - Starting market simulation
-2025-04-07 02:44:54,076 - trading_simulator - INFO - Running simulation for 30 seconds...
-2025-04-07 02:44:54,076 - py_rs_quant.simulation.simulator - INFO - Starting simulation in RANDOM mode for 30 seconds
+(venv) ➜  py-rs-quant git:(main) trading-sim simulate --duration 3 --symbols BTCUSD      
+2025-04-07 04:11:53,716 - trading_simulator - INFO - Starting market simulation
+2025-04-07 04:11:53,716 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=True)
+2025-04-07 04:11:53,716 - trading_simulator - INFO - Running simulation for 3 seconds...
+2025-04-07 04:11:53,716 - trading_simulator - INFO - Running simulation with 8s timeout
+2025-04-07 04:11:53,716 - py_rs_quant.simulation.simulator - INFO - Starting simulation in RANDOM mode for 3 seconds
+2025-04-07 04:11:53,716 - py_rs_quant.simulation.simulator - INFO - Generating initial orders...
+2025-04-07 04:11:53,716 - py_rs_quant.simulation.simulator - INFO - Order: BTCUSD SELL LIMIT size=0.06375508, price=51485.41
+2025-04-07 04:11:53,716 - py_rs_quant.simulation.simulator - INFO - Order added with ID: 1
+2025-04-07 04:11:53,716 - py_rs_quant.simulation.simulator - INFO - Order: BTCUSD BUY LIMIT size=0.25442736, price=49275.82
+2025-04-07 04:11:53,716 - py_rs_quant.simulation.simulator - INFO - Order added with ID: 2
+2025-04-07 04:11:53,717 - py_rs_quant.simulation.simulator - INFO - Order: BTCUSD SELL LIMIT size=0.05665181, price=51657.51
+2025-04-07 04:11:53,717 - py_rs_quant.simulation.simulator - INFO - Order added with ID: 3
 ...
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - === Simulation Statistics ===
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Mode: RANDOM
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Duration: 30.12 seconds
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Orders generated: 153
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Orders per second: 5.08
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Trades executed: 87
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Trades per second: 2.89
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Fill ratio: 56.86%
-2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - BTCUSD price: 49889.69 (-0.22% change)
-2025-04-07 02:45:24,076 - trading_simulator - INFO - Summary statistics for BTCUSD:
-2025-04-07 02:45:24,076 - trading_simulator - INFO -   Total orders: 153
-2025-04-07 02:45:24,076 - trading_simulator - INFO -   Total trades: 87
-2025-04-07 02:45:24,076 - trading_simulator - INFO -   Fill ratio: 35.94%
-2025-04-07 02:45:24,076 - trading_simulator - INFO -   Volume: 4.32658973
-2025-04-07 02:45:24,076 - trading_simulator - INFO -   Final price: 49889.69
-2025-04-07 02:45:24,076 - trading_simulator - INFO -   Price change: -0.22%
+2025-04-07 04:11:56,633 - py_rs_quant.simulation.simulator - INFO - Order added with ID: 24
+2025-04-07 04:11:56,888 - py_rs_quant.simulation.simulator - INFO - Order: BTCUSD SELL LIMIT size=0.06572257, price=51107.13
+2025-04-07 04:11:56,889 - py_rs_quant.simulation.simulator - INFO - Order added with ID: 25
+2025-04-07 04:11:56,889 - py_rs_quant.simulation.simulator - INFO - === Simulation Statistics ===
+2025-04-07 04:11:56,889 - py_rs_quant.simulation.simulator - INFO - Mode: RANDOM
+2025-04-07 04:11:56,889 - py_rs_quant.simulation.simulator - INFO - Duration: 3.17 seconds
+2025-04-07 04:11:56,889 - py_rs_quant.simulation.simulator - INFO - Orders generated: 25
+2025-04-07 04:11:56,891 - py_rs_quant.simulation.simulator - INFO - Orders per second: 7.88
+2025-04-07 04:11:56,891 - py_rs_quant.simulation.simulator - INFO - Trades executed: 7
+2025-04-07 04:11:56,891 - py_rs_quant.simulation.simulator - INFO - Trades per second: 2.21
+2025-04-07 04:11:56,891 - py_rs_quant.simulation.simulator - INFO - Fill ratio: 28.00%
+2025-04-07 04:11:56,891 - py_rs_quant.simulation.simulator - INFO - BTCUSD price: 49786.58 (-0.43% change)
+2025-04-07 04:11:56,892 - trading_simulator - INFO - Simulation completed in 3.18 seconds
+2025-04-07 04:11:56,893 - trading_simulator - INFO - Summary statistics for BTCUSD:
+2025-04-07 04:11:56,893 - trading_simulator - INFO -   Total orders: 25
+2025-04-07 04:11:56,893 - trading_simulator - INFO -   Total trades: 0
+2025-04-07 04:11:56,893 - trading_simulator - INFO -   Fill ratio: 0.00%
+2025-04-07 04:11:56,893 - trading_simulator - INFO -   Volume: 0.0
+2025-04-07 04:11:56,893 - trading_simulator - INFO -   Final price: 49786.58
+2025-04-07 04:11:56,893 - trading_simulator - INFO -   Price change: -0.43%
+(venv) ➜  py-rs-quant git:(main) 
 ```
 
 Try different simulation modes:
@@ -204,23 +219,58 @@ trading-sim benchmark --iterations 5 --orders 10000
 
 Sample output:
 ```
-2025-04-07 02:21:37,678 - trading_simulator - INFO - Starting performance benchmark
-2025-04-07 02:21:37,678 - trading_simulator - INFO - Benchmarking PYTHON implementation
-2025-04-07 02:21:37,678 - trading_simulator - INFO -   Running iteration 1/5
-...
-2025-04-07 02:21:38,087 - trading_simulator - INFO -   PYTHON results:
-2025-04-07 02:21:38,087 - trading_simulator - INFO -     Average orders/sec: 1048635.67
-2025-04-07 02:21:38,087 - trading_simulator - INFO -     Average trades/sec: 0.00
-2025-04-07 02:21:38,087 - trading_simulator - INFO - Benchmarking RUST implementation
-...
-2025-04-07 02:21:38,087 - trading_simulator - INFO -   RUST results:
-2025-04-07 02:21:38,087 - trading_simulator - INFO -     Average orders/sec: 1228736.62
-2025-04-07 02:21:38,087 - trading_simulator - INFO -     Average trades/sec: 0.00
-2025-04-07 02:21:38,087 - trading_simulator - INFO - Benchmark comparison:
-2025-04-07 02:21:38,087 - trading_simulator - INFO -   Python mean latency: 0.001 ms
-2025-04-07 02:21:38,087 - trading_simulator - INFO -   Rust mean latency: 0.001 ms
-2025-04-07 02:21:38,087 - trading_simulator - INFO -   Improvement factor: 1.22x
-2025-04-07 02:21:38,087 - trading_simulator - INFO -   Improvement percent: 17.71%
+(venv) ➜  py-rs-quant git:(main) ✗ trading-sim benchmark --iterations 5 --orders 10000
+2025-04-07 04:13:00,375 - trading_simulator - INFO - Starting performance benchmark
+2025-04-07 04:13:00,375 - trading_simulator - INFO - Benchmarking PYTHON implementation
+2025-04-07 04:13:00,375 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=False)
+2025-04-07 04:13:00,375 - trading_simulator - INFO -   Running iteration 1/5
+2025-04-07 04:13:00,375 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=False)
+2025-04-07 04:13:00,500 - trading_simulator - INFO -   Running iteration 2/5
+2025-04-07 04:13:00,500 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=False)
+2025-04-07 04:13:00,633 - trading_simulator - INFO -   Running iteration 3/5
+2025-04-07 04:13:00,633 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=False)
+2025-04-07 04:13:00,768 - trading_simulator - INFO -   Running iteration 4/5
+2025-04-07 04:13:00,768 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=False)
+2025-04-07 04:13:00,904 - trading_simulator - INFO -   Running iteration 5/5
+2025-04-07 04:13:00,904 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=False)
+2025-04-07 04:13:01,053 - trading_simulator - INFO -   PYTHON results:
+2025-04-07 04:13:01,053 - trading_simulator - INFO -     Average orders/sec: 314533.58
+2025-04-07 04:13:01,053 - trading_simulator - INFO -     Average trades/sec: 912.15
+2025-04-07 04:13:01,053 - trading_simulator - INFO -     Latency (ms) - min: 0.002, max: 0.005, avg: 0.003
+2025-04-07 04:13:01,053 - trading_simulator - INFO -     Latency (ms) - median: 0.003, p99: 0.005
+2025-04-07 04:13:01,053 - trading_simulator - INFO -     Total latency sum (ms): 0.017
+2025-04-07 04:13:01,053 - trading_simulator - INFO -     Overall throughput (ops/sec): 299576.45
+2025-04-07 04:13:01,053 - trading_simulator - INFO - Benchmarking RUST implementation
+2025-04-07 04:13:01,053 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=True)
+2025-04-07 04:13:01,054 - trading_simulator - INFO -   Running iteration 1/5
+2025-04-07 04:13:01,054 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=True)
+2025-04-07 04:13:01,176 - trading_simulator - INFO -   Running iteration 2/5
+2025-04-07 04:13:01,176 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=True)
+2025-04-07 04:13:01,301 - trading_simulator - INFO -   Running iteration 3/5
+2025-04-07 04:13:01,302 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=True)
+2025-04-07 04:13:01,417 - trading_simulator - INFO -   Running iteration 4/5
+2025-04-07 04:13:01,417 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=True)
+2025-04-07 04:13:01,539 - trading_simulator - INFO -   Running iteration 5/5
+2025-04-07 04:13:01,539 - py_rs_quant.core.engine - INFO - Initializing MatchingEngine (use_rust=True)
+2025-04-07 04:13:01,664 - trading_simulator - INFO -   RUST results:
+2025-04-07 04:13:01,665 - trading_simulator - INFO -     Average orders/sec: 496603.20
+2025-04-07 04:13:01,665 - trading_simulator - INFO -     Average trades/sec: 1440.15
+2025-04-07 04:13:01,665 - trading_simulator - INFO -     Latency (ms) - min: 0.001, max: 0.002, avg: 0.002
+2025-04-07 04:13:01,665 - trading_simulator - INFO -     Latency (ms) - median: 0.002, p99: 0.002
+2025-04-07 04:13:01,665 - trading_simulator - INFO -     Total latency sum (ms): 0.010
+2025-04-07 04:13:01,665 - trading_simulator - INFO -     Overall throughput (ops/sec): 481506.18
+2025-04-07 04:13:01,665 - trading_simulator - INFO - Benchmark comparison:
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   Python mean latency: 0.003 ms
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   Rust mean latency: 0.002 ms
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   Improvement factor: 1.61x
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   Improvement percent: 37.78%
+2025-04-07 04:13:01,665 - trading_simulator - INFO - Detailed comparison:
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   Min latency: Python 0.002 ms vs Rust 0.001 ms
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   Max latency: Python 0.005 ms vs Rust 0.002 ms
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   Median latency: Python 0.003 ms vs Rust 0.002 ms
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   p99 latency: Python 0.005 ms vs Rust 0.002 ms
+2025-04-07 04:13:01,665 - trading_simulator - INFO -   Throughput: Python 299576.45 ops/s vs Rust 481506.18 ops/s
+(venv) ➜  py-rs-quant git:(main) ✗ 
 ```
 
 This benchmark demonstrates the performance difference between the pure Python implementation and the Rust-accelerated version of the matching engine.
