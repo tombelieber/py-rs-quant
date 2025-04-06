@@ -150,6 +150,11 @@ async def run_simulation(args):
     logger.info(f"Running simulation for {args.duration} seconds...")
     start_time = time.time()
     
+    # Add initial prices to the analyzer
+    for symbol, price in symbol_prices.items():
+        timestamp = int(start_time * 1000)
+        analyzer.add_price(symbol, timestamp, price)
+    
     try:
         await simulator.run(duration_seconds=args.duration, print_stats=True)
     except KeyboardInterrupt:
