@@ -2,6 +2,30 @@
 
 High-Performance Order Matching Engine and Trading Simulator built with Python and Rust.
 
+## Table of Contents
+
+- [Project Structure](#project-structure)
+- [Features](#features)
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Install from source](#install-from-source)
+  - [Enable Rust acceleration](#enable-rust-acceleration-recommended)
+- [Usage](#usage)
+  - [CLI](#cli)
+  - [API Server](#api-server)
+  - [Python API](#python-api)
+- [Quick Start Demos](#quick-start-demos)
+  - [Trading Simulator Demo](#trading-simulator-demo)
+  - [Performance Benchmark Demo](#performance-benchmark-demo)
+  - [Save Results to File](#save-results-to-file)
+- [API Endpoints](#api-endpoints)
+- [Docker](#docker)
+- [Optimization Techniques](#optimization-techniques)
+  - [Language-Specific Optimizations](#language-specific-optimizations)
+  - [Shared Optimization Strategies](#shared-optimization-strategies)
+  - [Benchmark Results](#benchmark-results)
+- [License](#license)
+
 ## Project Structure
 
 ```
@@ -305,6 +329,53 @@ The project includes Docker support for easy deployment.
 # Build and start the services
 docker-compose up -d
 ```
+
+## Optimization Techniques
+
+This project employs various performance optimization techniques to achieve high-throughput, low-latency order matching. Below is a comparison of optimization techniques used in both the Python and Rust implementations:
+
+### Language-Specific Optimizations
+
+| Category | Python Optimizations | Rust Optimizations |
+|----------|---------------------|-------------------|
+| **Core Performance** | • Numba JIT compilation for critical paths<br>• NumPy vectorized operations<br>• Specialized container types (SortedDict)<br>• Slot-based classes to reduce memory footprint | • Zero-cost abstractions<br>• LLVM optimizations<br>• Link Time Optimization (LTO)<br>• Reduced code generation units (codegen-units=1)<br>• Maximum optimization level (opt-level=3) |
+| **Memory Management** | • Object pooling to reduce GC pressure<br>• `__slots__` in classes to reduce overhead<br>• Pre-sized collections where possible | • Stack allocation for most objects<br>• No garbage collection overhead<br>• Pre-allocated vectors with capacity hints<br>• Ownership model preventing memory leaks |
+| **Data Structures** | • SortedDict for order book price levels<br>• Array-based heap queues for priority<br>• Dictionaries for fast lookups | • BTreeMap for ordered price levels<br>• Vec with swap_remove for O(1) deletion<br>• HashMap for fast id-based lookups |
+| **Concurrency** | • Async/await for non-blocking operations<br>• Asyncio event loop for simulator | • Rayon for parallel processing<br>• Thread-safe structures using RwLock<br>• Arc for shared ownership across threads |
+
+### Shared Optimization Strategies
+
+Both implementations leverage these common optimization techniques:
+
+1. **Algorithmic Optimizations**:
+   - Cached aggregations with dirty flags for lazy updates
+   - Separate path optimization for market vs limit orders
+   - Order batching for amortized processing costs
+   - Price level aggregation to reduce individual order processing
+
+2. **Domain-Specific Optimizations**: 
+   - Pre-sorting orders by price and time priority
+   - Fast-path for non-matching orders
+   - Optimistic order matching paths
+   - Specialized price comparison logic
+
+3. **Simulation Performance**:
+   - Poisson process for realistic order arrival
+   - Multiple market behavior models (random, trending, mean-reverting)
+   - Event-based architecture to minimize overhead
+
+4. **Instrumentation**:
+   - High-precision latency measurements
+   - Performance metrics collection
+   - Throughput reporting tools
+
+### Benchmark Results
+
+As shown in the benchmark section, the Rust implementation achieves approximately 1.5-2x performance improvement over the optimized Python version:
+
+- **Python**: ~314,500 orders/sec, ~0.003ms average latency
+- **Rust**: ~496,600 orders/sec, ~0.002ms average latency
+- **Improvement**: 1.61x throughput, 37.78% latency reduction
 
 ## License
 
