@@ -266,6 +266,20 @@ class MatchingEngine:
         
         return (buy_tuples, sell_tuples)
     
+    def get_order(self, order_id: int) -> Optional[Order]:
+        """Get an order by its ID."""
+        # Look in buy orders
+        for _, _, _, order in self.buy_orders:
+            if order.id == order_id:
+                return order
+                
+        # Look in sell orders
+        for _, _, _, order in self.sell_orders:
+            if order.id == order_id:
+                return order
+                
+        return None
+    
     def get_trades(self) -> List[Trade]:
         """Get all trades that have occurred."""
         return self.trades 

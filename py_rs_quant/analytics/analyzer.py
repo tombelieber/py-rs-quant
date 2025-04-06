@@ -14,7 +14,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 
-from py_rs_quant.core.engine import Trade, Order, OrderSide, OrderType
+from py_rs_quant.core.engine import Trade, Order, OrderSide, OrderType, OrderStatus
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,23 @@ class PerformanceAnalyzer:
             trade: The trade to add
         """
         self.trades.append(trade)
+        
+        # Update the corresponding orders if they exist
+        if trade.buy_order_id in self.orders:
+            buy_order = self.orders[trade.buy_order_id]
+            buy_order.filled_quantity += trade.quantity
+            if buy_order.filled_quantity >= buy_order.quantity:
+                buy_order.status = OrderStatus.FILLED
+            else:
+                buy_order.status = OrderStatus.PARTIALLY_FILLED
+                
+        if trade.sell_order_id in self.orders:
+            sell_order = self.orders[trade.sell_order_id]
+            sell_order.filled_quantity += trade.quantity
+            if sell_order.filled_quantity >= sell_order.quantity:
+                sell_order.status = OrderStatus.FILLED
+            else:
+                sell_order.status = OrderStatus.PARTIALLY_FILLED
     
     def add_order(self, order: Order) -> None:
         """
