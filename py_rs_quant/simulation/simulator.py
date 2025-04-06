@@ -111,22 +111,41 @@ class MarketSimulator:
         # Main simulation loop
         end_time = self.start_time + duration_seconds
         
-        while self.running and time.time() < end_time:
-            # Calculate delay based on order rate (Poisson process)
-            delay = random.expovariate(self.order_rate)
-            await asyncio.sleep(delay)
-            
-            # Generate and process a new order
+        # Generate some initial orders immediately to get the simulation going
+        logger.info("Generating initial orders...")
+        for _ in range(5):  # Generate 5 initial orders
             await self._generate_next_order()
-            
-            # Update statistics
             self.orders_generated += 1
         
-        self.running = False
-        self.end_time = time.time()
+        logger.info(f"Running main simulation loop until {time.strftime('%H:%M:%S', time.localtime(end_time))}")
         
-        if print_stats:
-            self.print_stats()
+        try:
+            while self.running and time.time() < end_time:
+                # Calculate delay based on order rate (Poisson process)
+                delay = random.expovariate(self.order_rate)
+                await asyncio.sleep(delay)
+                
+                # Generate and process a new order
+                await self._generate_next_order()
+                
+                # Update statistics
+                self.orders_generated += 1
+                
+                # Periodically log progress
+                if self.orders_generated % 20 == 0:
+                    elapsed = time.time() - self.start_time
+                    remaining = max(0, end_time - time.time())
+                    logger.info(f"Generated {self.orders_generated} orders so far. {remaining:.1f}s remaining.")
+        except Exception as e:
+            logger.error(f"Error in simulation: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        finally:
+            self.running = False
+            self.end_time = time.time()
+            
+            if print_stats:
+                self.print_stats()
     
     def stop(self):
         """Stop the simulation."""
@@ -169,100 +188,114 @@ class MarketSimulator:
     
     async def _generate_next_order(self):
         """Generate the next order based on the simulation mode."""
-        # Select a random symbol
-        symbol = random.choice(self.symbols)
-        
-        # Update the current price based on the simulation mode
-        self._update_price(symbol)
-        
-        # Determine order type (market or limit)
-        is_market_order = self.enable_market_orders and random.random() < self.market_order_pct
-        
-        # Determine order side (buy or sell)
-        is_buy = random.random() < 0.5
-        
-        # Determine order size (log-normal distribution)
-        size_factor = random.lognormvariate(0, 0.5)  # mean=1, stddev depends on the second parameter
-        base_size = 0.1 if symbol == "BTCUSD" else 1.0  # Example: smaller size for BTC, larger for ETH
-        order_size = round(base_size * size_factor, 8)  # Round to 8 decimal places
-        
-        # Create order
-        if is_market_order:
-            order_type = OrderType.MARKET
-            price = None
-        else:
-            order_type = OrderType.LIMIT
-            
-            # For limit orders, set price relative to current price
-            current_price = self.current_prices[symbol]
-            
-            # Add some random offset for limit orders
-            if is_buy:
-                # Buy orders are typically below current price but not too far
-                # Change from lognormvariate to a smaller offset
-                offset_factor = -random.uniform(0.01, 0.05)  # Small negative offset (1-5%)
-            else:
-                # Sell orders are typically above current price but not too far
-                # Change from lognormvariate to a smaller offset
-                offset_factor = random.uniform(0.01, 0.05)  # Small positive offset (1-5%)
-            
-            # Apply offset and round to tick size
-            price_offset = current_price * offset_factor
-            price = round((current_price + price_offset) / self.tick_size) * self.tick_size
-            
-            # Ensure price is positive
-            price = max(self.tick_size, price)
-        
-        # Create order side
-        side = OrderSide.BUY if is_buy else OrderSide.SELL
-        
-        # Log the order
-        logger.debug(
-            f"Generated order: symbol={symbol}, side={'BUY' if is_buy else 'SELL'}, "
-            f"type={'MARKET' if is_market_order else 'LIMIT'}, "
-            f"size={order_size}, price={price}"
-        )
-        
-        # Apply risk checks if risk manager is available
-        if self.risk_manager:
-            order_size_signed = order_size if is_buy else -order_size
-            check_price = price if price is not None else self.current_prices[symbol]
-            
-            risk_result = self.risk_manager.check_order(
-                symbol=symbol,
-                order_size=order_size_signed,
-                price=check_price,
-                check_price_tolerance=not is_market_order
-            )
-            
-            if risk_result != RiskCheckResult.PASSED:
-                logger.debug(f"Order rejected by risk manager: {risk_result.name}")
-                return
-        
-        # Submit to matching engine
-        timestamp = int(time.time() * 1000)
-        order_id = None
-        
         try:
-            if is_market_order:
-                order_id = self.matching_engine.add_market_order(side, order_size, timestamp, symbol)
-            else:
-                order_id = self.matching_engine.add_limit_order(side, price, order_size, timestamp, symbol)
+            # Select a random symbol
+            symbol = random.choice(self.symbols)
             
-            # Call the order callback if registered
-            if self.on_order_callback:
-                order = Order(
-                    order_id=order_id,
-                    side=side,
-                    order_type=order_type,
-                    price=price,
-                    quantity=order_size,
-                    timestamp=timestamp,
-                    symbol=symbol
+            # Update the current price based on the simulation mode
+            self._update_price(symbol)
+            
+            # Determine order type (market or limit)
+            is_market_order = self.enable_market_orders and random.random() < self.market_order_pct
+            
+            # Determine order side (buy or sell)
+            is_buy = random.random() < 0.5
+            
+            # Determine order size (log-normal distribution)
+            size_factor = random.lognormvariate(0, 0.5)  # mean=1, stddev depends on the second parameter
+            base_size = 0.1 if symbol == "BTCUSD" else 1.0  # Example: smaller size for BTC, larger for ETH
+            order_size = round(base_size * size_factor, 8)  # Round to 8 decimal places
+            
+            # Create order
+            if is_market_order:
+                order_type = OrderType.MARKET
+                price = None
+            else:
+                order_type = OrderType.LIMIT
+                
+                # For limit orders, set price relative to current price
+                current_price = self.current_prices[symbol]
+                
+                # Add some random offset for limit orders
+                if is_buy:
+                    # Buy orders are typically below current price but not too far
+                    # Change from lognormvariate to a smaller offset
+                    offset_factor = -random.uniform(0.01, 0.05)  # Small negative offset (1-5%)
+                else:
+                    # Sell orders are typically above current price but not too far
+                    # Change from lognormvariate to a smaller offset
+                    offset_factor = random.uniform(0.01, 0.05)  # Small positive offset (1-5%)
+                
+                # Apply offset and round to tick size
+                price_offset = current_price * offset_factor
+                price = round((current_price + price_offset) / self.tick_size) * self.tick_size
+                
+                # Ensure price is positive
+                price = max(self.tick_size, price)
+            
+            # Create order side
+            side = OrderSide.BUY if is_buy else OrderSide.SELL
+            
+            # Log the order details
+            log_msg = (
+                f"Order: {symbol} {side.name} {order_type.name} "
+                f"size={order_size:.8f}"
+            )
+            if not is_market_order:
+                log_msg += f", price={price:.2f}"
+            logger.info(log_msg)
+            
+            # Apply risk checks if risk manager is available
+            if self.risk_manager:
+                order_size_signed = order_size if is_buy else -order_size
+                check_price = price if price is not None else self.current_prices[symbol]
+                
+                risk_result = self.risk_manager.check_order(
+                    symbol=symbol,
+                    order_size=order_size_signed,
+                    price=check_price,
+                    check_price_tolerance=not is_market_order
                 )
-                self.on_order_callback(order)
+                
+                if risk_result != RiskCheckResult.PASSED:
+                    logger.info(f"Order rejected by risk manager: {risk_result.name}")
+                    return
+            
+            # Submit to matching engine with a timeout 
+            timestamp = int(time.time() * 1000)
+            order_id = None
+            
+            # Use a timeout to prevent potential hanging
+            try:
+                # Set a timeout to prevent indefinite hanging
+                if is_market_order:
+                    order_id = self.matching_engine.add_market_order(side, order_size, timestamp, symbol)
+                else:
+                    order_id = self.matching_engine.add_limit_order(side, price, order_size, timestamp, symbol)
+                
+                logger.info(f"Order added with ID: {order_id}")
+                
+                # Call the order callback if registered
+                if self.on_order_callback:
+                    order = Order(
+                        order_id=order_id,
+                        side=side,
+                        order_type=order_type,
+                        price=price,
+                        quantity=order_size,
+                        timestamp=timestamp,
+                        symbol=symbol
+                    )
+                    self.on_order_callback(order)
+            except Exception as e:
+                logger.error(f"Error adding order to matching engine: {e}")
+            
+        except asyncio.TimeoutError:
+            logger.error("Timeout while adding order to matching engine")
         except Exception as e:
-            logger.error(f"Error submitting order: {e}")
+            logger.error(f"Error generating/submitting order: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def _update_price(self, symbol: str):
         """Update the current price based on the simulation mode."""

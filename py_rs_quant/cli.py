@@ -156,7 +156,21 @@ async def run_simulation(args):
         analyzer.add_price(symbol, timestamp, price)
     
     try:
-        await simulator.run(duration_seconds=args.duration, print_stats=True)
+        # Add a timeout to prevent hanging indefinitely
+        # The timeout is set to duration + 5 seconds to give some leeway
+        timeout = args.duration + 5
+        
+        async def run_with_timeout():
+            logger.info(f"Running simulation with {timeout}s timeout")
+            return await asyncio.wait_for(
+                simulator.run(duration_seconds=args.duration, print_stats=True),
+                timeout=timeout
+            )
+        
+        await run_with_timeout()
+    except asyncio.TimeoutError:
+        logger.error(f"Simulation timed out after {timeout} seconds")
+        simulator.stop()
     except KeyboardInterrupt:
         logger.info("Simulation interrupted")
         simulator.stop()

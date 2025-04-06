@@ -9,9 +9,12 @@ from collections import defaultdict
 from sortedcontainers import SortedDict  # For efficient order book management
 import numpy as np
 from numba import jit
+import logging
 
 # For now, use a Python implementation only
 RUST_ENGINE_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 class OrderSide(Enum):
     BUY = 1
@@ -74,36 +77,37 @@ class Order:
 
 
 class PriceLevel:
-    """
-    Represents a price level in the order book with multiple orders at the same price.
-    Using this to avoid creating many small tuples during order matching.
-    """
-    __slots__ = ['price', 'orders', 'total_qty_cache', 'is_dirty']
+    """Price level for aggregating orders at the same price."""
     
     def __init__(self, price: float):
+        """Initialize with the price for this level."""
         self.price = price
-        self.orders = []  # List of orders at this price level
+        self.orders = []
         self.total_qty_cache = 0.0  # Cache for total quantity
         self.is_dirty = True  # Flag to indicate if cache needs update
-        
-    def add_order(self, order: Order) -> None:
+    
+    def add_order(self, order):
+        """Add an order to this price level."""
         self.orders.append(order)
         self.total_qty_cache += order.remaining_quantity
         
-    def remove_order(self, order_id: int) -> bool:
+    def remove_order(self, order_id):
+        """Remove an order from this price level by ID."""
         for i, order in enumerate(self.orders):
             if order.id == order_id:
                 self.orders.pop(i)
                 self.is_dirty = True  # Invalidate cache
-                return True
-        return False
-        
-    def update_qty_cache(self) -> None:
+                return order
+        return None
+    
+    def update_qty_cache(self):
+        """Update the cached total quantity if needed."""
         if self.is_dirty:
             self.total_qty_cache = sum(order.remaining_quantity for order in self.orders)
             self.is_dirty = False
-        
-    def total_quantity(self) -> float:
+    
+    def total_quantity(self):
+        """Get the total quantity at this price level."""
         self.update_qty_cache()
         return self.total_qty_cache
     
@@ -154,6 +158,7 @@ class MatchingEngine:
     def __init__(self, use_rust: bool = False):
         # For now, ignore use_rust parameter since we're using Python implementation
         self.use_rust = False
+        logger.info(f"Initializing MatchingEngine (use_rust={use_rust}, but using Python implementation)")
         self.next_order_id = 1
         self.next_trade_id = 1
         
@@ -217,9 +222,17 @@ class MatchingEngine:
         order_id = self.next_order_id
         self.next_order_id += 1
         
+        logger.debug(f"Adding limit order: id={order_id}, side={side.name}, price={price}, qty={quantity}, symbol={symbol}")
+        
         # Get order from pool or create new
         order = self.get_order_from_pool(order_id, side, OrderType.LIMIT, price, quantity, ts, symbol)
         self.orders_by_id[order_id] = order
+        
+        # For limit orders that can cross immediately, store the price for efficient lookup
+        if side == OrderSide.BUY:
+            self.order_price_map[order_id] = -price  # Negate for correct sorting
+        else:
+            self.order_price_map[order_id] = price
         
         # Process the order (match or add to book)
         self._process_order(order)
@@ -231,6 +244,8 @@ class MatchingEngine:
         ts = timestamp if timestamp is not None else int(time.time() * 1000)
         order_id = self.next_order_id
         self.next_order_id += 1
+        
+        logger.debug(f"Adding market order: id={order_id}, side={side.name}, qty={quantity}, symbol={symbol}")
         
         # Get order from pool or create new
         order = self.get_order_from_pool(order_id, side, OrderType.MARKET, None, quantity, ts, symbol)
@@ -311,10 +326,26 @@ class MatchingEngine:
     
     def _process_order(self, order: Order) -> None:
         """Process an order (match or add to book)."""
-        if order.side == OrderSide.BUY:
-            self._process_buy_order(order)
-        else:  # SELL order
-            self._process_sell_order(order)
+        try:
+            if order.side == OrderSide.BUY:
+                self._process_buy_order(order)
+            else:  # SELL order
+                self._process_sell_order(order)
+        except Exception as e:
+            logger.error(f"Error processing order: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Ensure the order doesn't get lost if there's an error
+            if order.order_type == OrderType.LIMIT and order.remaining_quantity > 0:
+                if order.side == OrderSide.BUY:
+                    price_key = -order.price
+                    price_level = self._get_or_create_price_level(self.buy_price_levels, price_key)
+                else:
+                    price_key = order.price
+                    price_level = self._get_or_create_price_level(self.sell_price_levels, price_key)
+                
+                price_level.add_order(order)
+                self.order_price_map[order.id] = price_key
     
     def _get_or_create_price_level(self, price_dict: SortedDict, price: float, create_new: bool = True) -> Optional[PriceLevel]:
         """
@@ -433,7 +464,7 @@ class MatchingEngine:
                 if not price_level:
                     continue
                     
-                self._match_at_price_level(price_level, order)
+                self._match_at_price_level(order, price_level)
                 
                 # Mark for removal if empty
                 if not price_level.orders:
@@ -460,7 +491,7 @@ class MatchingEngine:
                 if not price_level:
                     continue
                     
-                self._match_at_price_level(price_level, order)
+                self._match_at_price_level(order, price_level)
                 
                 # Mark for removal if empty
                 if not price_level.orders:
@@ -483,122 +514,107 @@ class MatchingEngine:
             price_level.add_order(order)
             self.order_price_map[order.id] = order.price
     
-    def _match_at_price_level(self, buy_order_or_level, sell_order_or_level) -> None:
+    def _match_at_price_level(self, active_order: Order, price_level: PriceLevel) -> None:
         """
-        Match orders at a specific price level.
+        Match an active order against a price level.
         
         Args:
-            buy_order_or_level: Either a buy Order or a PriceLevel of buy orders
-            sell_order_or_level: Either a sell Order or a PriceLevel of sell orders
+            active_order: The order to match
+            price_level: The price level to match against
         """
-        if isinstance(buy_order_or_level, Order):
-            # Single buy order against price level of sell orders
-            buy_order = buy_order_or_level
-            sell_level = sell_order_or_level
-            
-            # Match orders in time priority
-            i = 0
-            orders_to_remove = []  # Track indices to remove in a batch
-            
-            while i < len(sell_level.orders) and buy_order.remaining_quantity > 0:
-                sell_order = sell_level.orders[i]
+        try:
+            # First check that parameters are of the correct type
+            if not isinstance(price_level, PriceLevel) or not isinstance(active_order, Order):
+                logger.error(f"Invalid parameters to _match_at_price_level: active_order={type(active_order)}, price_level={type(price_level)}")
+                return
                 
-                # Calculate the trade quantity using JIT-compiled function
-                trade_qty = calculate_trade_qty(buy_order.remaining_quantity, sell_order.remaining_quantity)
+            # Safety check to prevent infinite recursion
+            if not hasattr(price_level, 'orders') or len(price_level.orders) == 0 or active_order.remaining_quantity <= 0:
+                return
+            
+            # Match against resting orders in the price level
+            for resting_order in list(price_level.orders):  # Make a copy to prevent concurrent modification
+                # Skip if either order is fully matched
+                if active_order.remaining_quantity <= 0 or resting_order.remaining_quantity <= 0:
+                    continue
                 
-                # Execute the trade at the sell order price
-                self._execute_trade(buy_order, sell_order, sell_order.price, trade_qty)
+                # Determine the quantity to match
+                match_quantity = min(active_order.remaining_quantity, resting_order.remaining_quantity)
                 
-                # Mark filled sell orders for removal
-                if sell_order.status == OrderStatus.FILLED:
-                    orders_to_remove.append(i)
-                    # Don't increment i since we'll remove this item
-                else:
-                    i += 1  # Move to next order
-            
-            # Remove filled orders in reverse order to maintain correct indices
-            for idx in reversed(orders_to_remove):
-                sell_level.orders.pop(idx)
-            
-            # Update the cached total quantity
-            sell_level.is_dirty = True
-                    
-        elif isinstance(sell_order_or_level, Order):
-            # Single sell order against price level of buy orders
-            buy_level = buy_order_or_level
-            sell_order = sell_order_or_level
-            
-            # Match orders in time priority
-            i = 0
-            orders_to_remove = []  # Track indices to remove in a batch
-            
-            while i < len(buy_level.orders) and sell_order.remaining_quantity > 0:
-                buy_order = buy_level.orders[i]
+                # Determine the match price (price of the resting order)
+                match_price = price_level.price if resting_order.side == OrderSide.SELL else -price_level.price
                 
-                # Calculate the trade quantity using JIT-compiled function
-                trade_qty = calculate_trade_qty(buy_order.remaining_quantity, sell_order.remaining_quantity)
+                # Execute the trade
+                self._execute_trade(
+                    buy_id=active_order.id if active_order.side == OrderSide.BUY else resting_order.id,
+                    sell_id=active_order.id if active_order.side == OrderSide.SELL else resting_order.id,
+                    price=abs(match_price),
+                    quantity=match_quantity,
+                    timestamp=max(active_order.timestamp, resting_order.timestamp),
+                    active_order=active_order,
+                    resting_order=resting_order
+                )
                 
-                # Execute the trade at the buy order price
-                self._execute_trade(buy_order, sell_order, buy_order.price, trade_qty)
+                # Remove fully matched resting orders
+                if resting_order.remaining_quantity <= 0:
+                    price_level.remove_order(resting_order.id)
+                    if resting_order.id in self.orders_by_id:
+                        del self.orders_by_id[resting_order.id]
+                    if resting_order.id in self.order_price_map:
+                        del self.order_price_map[resting_order.id]
                 
-                # Mark filled buy orders for removal
-                if buy_order.status == OrderStatus.FILLED:
-                    orders_to_remove.append(i)
-                    # Don't increment i since we'll remove this item
-                else:
-                    i += 1  # Move to next order
-            
-            # Remove filled orders in reverse order to maintain correct indices
-            for idx in reversed(orders_to_remove):
-                buy_level.orders.pop(idx)
-            
-            # Update the cached total quantity
-            buy_level.is_dirty = True
+                # Break if active order is fully matched
+                if active_order.remaining_quantity <= 0:
+                    break
+        except Exception as e:
+            logger.error(f"Error matching at price level: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
-    def _execute_trade(self, buy_order: Order, sell_order: Order, price: float, quantity: float) -> None:
-        """Execute a trade between a buy and sell order."""
+    def _execute_trade(self, buy_id: int, sell_id: int, price: float, quantity: float, timestamp: int, active_order: Order, resting_order: Order) -> None:
+        """Execute a trade between two orders."""
         # Update the orders
-        buy_order.filled_quantity += quantity
-        buy_order.remaining_quantity -= quantity
-        sell_order.filled_quantity += quantity
-        sell_order.remaining_quantity -= quantity
+        active_order.filled_quantity += quantity
+        active_order.remaining_quantity -= quantity
+        resting_order.filled_quantity += quantity
+        resting_order.remaining_quantity -= quantity
         
         # Update order statuses
-        if buy_order.filled_quantity >= buy_order.quantity:
-            buy_order.status = OrderStatus.FILLED
+        if active_order.filled_quantity >= active_order.quantity:
+            active_order.status = OrderStatus.FILLED
             # Remove from price map if filled
-            if buy_order.id in self.order_price_map:
-                del self.order_price_map[buy_order.id]
+            if active_order.id in self.order_price_map:
+                del self.order_price_map[active_order.id]
         else:
-            buy_order.status = OrderStatus.PARTIALLY_FILLED
+            active_order.status = OrderStatus.PARTIALLY_FILLED
             
-        if sell_order.filled_quantity >= sell_order.quantity:
-            sell_order.status = OrderStatus.FILLED
+        if resting_order.filled_quantity >= resting_order.quantity:
+            resting_order.status = OrderStatus.FILLED
             # Remove from price map if filled
-            if sell_order.id in self.order_price_map:
-                del self.order_price_map[sell_order.id]
+            if resting_order.id in self.order_price_map:
+                del self.order_price_map[resting_order.id]
         else:
-            sell_order.status = OrderStatus.PARTIALLY_FILLED
+            resting_order.status = OrderStatus.PARTIALLY_FILLED
         
         # Create a trade record - reuse from pool if available
         if self._trade_pool:
             trade = self._trade_pool.pop()
             trade.trade_id = self.next_trade_id
-            trade.buy_order_id = buy_order.id
-            trade.sell_order_id = sell_order.id
+            trade.buy_order_id = buy_id
+            trade.sell_order_id = sell_id
             trade.price = price
             trade.quantity = quantity
-            trade.symbol = buy_order.symbol
-            trade.timestamp = max(buy_order.timestamp, sell_order.timestamp)
+            trade.symbol = active_order.symbol
+            trade.timestamp = timestamp
         else:
             trade = Trade(
                 trade_id=self.next_trade_id,
-                buy_order_id=buy_order.id,
-                sell_order_id=sell_order.id,
+                buy_order_id=buy_id,
+                sell_order_id=sell_id,
                 price=price,
                 quantity=quantity,
-                symbol=buy_order.symbol,
-                timestamp=max(buy_order.timestamp, sell_order.timestamp)
+                symbol=active_order.symbol,
+                timestamp=timestamp
             )
         self.next_trade_id += 1
         
