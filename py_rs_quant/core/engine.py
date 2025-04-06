@@ -152,7 +152,7 @@ class MatchingEngine:
             # If it's a limit order and not fully filled, add to the order book
             if order.order_type == OrderType.LIMIT and order.remaining_quantity > 0:
                 # For buy orders, use negative price for the heap to get highest first
-                heapq.heappush(self.buy_orders, (-order.price, order.timestamp, order))
+                heapq.heappush(self.buy_orders, (-order.price, order.timestamp, order.id, order))
                 
         else:  # SELL order
             # Try to match against buy orders
@@ -162,7 +162,7 @@ class MatchingEngine:
                 if (order.order_type == OrderType.MARKET or 
                     (order.order_type == OrderType.LIMIT and order.price <= -self.buy_orders[0][0])):
                     
-                    _, _, match_order = self.buy_orders[0]
+                    _, _, _, match_order = self.buy_orders[0]
                     
                     # Calculate the trade quantity
                     trade_qty = min(order.remaining_quantity, match_order.remaining_quantity)
@@ -179,7 +179,7 @@ class MatchingEngine:
             
             # If it's a limit order and not fully filled, add to the order book
             if order.order_type == OrderType.LIMIT and order.remaining_quantity > 0:
-                heapq.heappush(self.sell_orders, (order.price, order.timestamp, order))
+                heapq.heappush(self.sell_orders, (order.price, order.timestamp, order.id, order))
     
     def _execute_trade(self, buy_order: Order, sell_order: Order, price: float, quantity: float) -> None:
         """Execute a trade between a buy and sell order."""
@@ -215,7 +215,7 @@ class MatchingEngine:
     def cancel_order(self, order_id: int) -> bool:
         """Cancel an order by its ID."""
         # Search in buy orders
-        for i, (_, _, order) in enumerate(self.buy_orders):
+        for i, (_, _, order_id_in_heap, order) in enumerate(self.buy_orders):
             if order.id == order_id:
                 order.status = OrderStatus.CANCELLED
                 self.buy_orders.pop(i)
@@ -223,7 +223,7 @@ class MatchingEngine:
                 return True
                 
         # Search in sell orders
-        for i, (_, _, order) in enumerate(self.sell_orders):
+        for i, (_, _, order_id_in_heap, order) in enumerate(self.sell_orders):
             if order.id == order_id:
                 order.status = OrderStatus.CANCELLED
                 self.sell_orders.pop(i)
@@ -239,13 +239,13 @@ class MatchingEngine:
         """
         # Combine quantities at the same price level for buy orders
         buy_levels = {}
-        for neg_price, _, order in self.buy_orders:
+        for neg_price, _, _, order in self.buy_orders:
             price = -neg_price  # Convert back to positive
             buy_levels[price] = buy_levels.get(price, 0) + order.remaining_quantity
             
         # Combine quantities at the same price level for sell orders
         sell_levels = {}
-        for price, _, order in self.sell_orders:
+        for price, _, _, order in self.sell_orders:
             sell_levels[price] = sell_levels.get(price, 0) + order.remaining_quantity
             
         # Convert to sorted lists of (price, quantity) tuples
