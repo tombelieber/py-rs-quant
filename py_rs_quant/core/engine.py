@@ -97,6 +97,11 @@ class MatchingEngine:
         self.buy_orders = []  # List of (price, timestamp, order) tuples for buy orders, price high to low
         self.sell_orders = []  # List of (price, timestamp, order) tuples for sell orders, price low to high
         self.trades = []
+        self.trade_callback = None
+    
+    def register_trade_callback(self, callback):
+        """Register a callback to be called when a trade is executed."""
+        self.trade_callback = callback
     
     def add_limit_order(self, side: OrderSide, price: float, quantity: float, timestamp: Optional[int] = None, symbol: Optional[str] = None) -> int:
         """Add a limit order to the order book."""
@@ -211,6 +216,10 @@ class MatchingEngine:
         
         # Add to trades list
         self.trades.append(trade)
+        
+        # Call the trade callback if registered
+        if self.trade_callback:
+            self.trade_callback(trade)
     
     def cancel_order(self, order_id: int) -> bool:
         """Cancel an order by its ID."""

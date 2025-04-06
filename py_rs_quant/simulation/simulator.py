@@ -164,6 +164,8 @@ class MarketSimulator:
     def register_trade_callback(self, callback: Callable[[Trade], None]):
         """Register a callback to be called when a trade is executed."""
         self.on_trade_callback = callback
+        # Register the callback with the matching engine
+        self.matching_engine.register_trade_callback(callback)
     
     async def _generate_next_order(self):
         """Generate the next order based on the simulation mode."""
