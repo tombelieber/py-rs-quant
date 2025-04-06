@@ -198,11 +198,13 @@ class MarketSimulator:
             
             # Add some random offset for limit orders
             if is_buy:
-                # Buy orders are typically below current price
-                offset_factor = -random.lognormvariate(-1, 0.5)  # Negative offset for buys
+                # Buy orders are typically below current price but not too far
+                # Change from lognormvariate to a smaller offset
+                offset_factor = -random.uniform(0.01, 0.05)  # Small negative offset (1-5%)
             else:
-                # Sell orders are typically above current price
-                offset_factor = random.lognormvariate(-1, 0.5)  # Positive offset for sells
+                # Sell orders are typically above current price but not too far
+                # Change from lognormvariate to a smaller offset
+                offset_factor = random.uniform(0.01, 0.05)  # Small positive offset (1-5%)
             
             # Apply offset and round to tick size
             price_offset = current_price * offset_factor

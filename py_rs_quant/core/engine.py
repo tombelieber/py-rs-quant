@@ -139,7 +139,7 @@ class MatchingEngine:
                 if (order.order_type == OrderType.MARKET or 
                     (order.order_type == OrderType.LIMIT and order.price >= self.sell_orders[0][0])):
                     
-                    _, _, match_order = self.sell_orders[0]
+                    _, _, _, match_order = self.sell_orders[0]
                     
                     # Calculate the trade quantity
                     trade_qty = min(order.remaining_quantity, match_order.remaining_quantity)

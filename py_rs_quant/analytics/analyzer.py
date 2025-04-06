@@ -147,10 +147,10 @@ class PerformanceAnalyzer:
         if not filtered_orders:
             return 0.0
         
-        # Count filled orders
+        # Count filled or partially filled orders
         filled_orders = [
             order for order in filtered_orders
-            if order.filled_quantity >= order.quantity
+            if order.filled_quantity > 0
         ]
         
         return len(filled_orders) / len(filtered_orders)
@@ -552,10 +552,14 @@ class PerformanceAnalyzer:
         # Calculate total orders and trades
         total_orders = len([
             order for order_id, order in self.orders.items()
-            if symbol is None  # All symbols
+            if order.symbol == symbol
         ])
         
-        total_trades = len(self.trades)
+        # Only count trades for the specified symbol
+        total_trades = len([
+            trade for trade in self.trades
+            if trade.symbol == symbol
+        ])
         
         return {
             "symbol": symbol,
@@ -654,8 +658,12 @@ class PerformanceAnalyzer:
         """
         filtered_trades = self.trades
         
-        # Filter by symbol (would require adding symbol to Trade in a real implementation)
-        # For now, we'll just skip this filter
+        # Filter by symbol
+        if symbol:
+            filtered_trades = [
+                trade for trade in filtered_trades
+                if trade.symbol == symbol
+            ]
         
         # Filter by time range
         if time_range:
