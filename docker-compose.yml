@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    command: python -m src.python.cli api --host 0.0.0.0 --port 8000
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=INFO
+      - USE_RUST=1
+      
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m src.python.cli simulate --duration 3600 --mode mean_reverting --order-rate 5.0 --output /app/logs/simulation_results.json
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - LOG_LEVEL=INFO
+      - USE_RUST=1
+
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m src.python.cli benchmark --iterations 5 --orders 10000 --output /app/logs/benchmark_results.json
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - LOG_LEVEL=INFO 
