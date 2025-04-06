@@ -117,6 +117,101 @@ async def run_simulation():
 asyncio.run(run_simulation())
 ```
 
+## Quick Start Demos
+
+### Trading Simulator Demo
+
+The trading simulator allows you to run market simulations with different parameters and modes.
+
+```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Run a basic simulation for 30 seconds with default parameters
+trading-sim simulate --duration 30 --symbols BTCUSD
+```
+
+Sample output:
+```
+2025-04-07 02:44:54,076 - trading_simulator - INFO - Starting market simulation
+2025-04-07 02:44:54,076 - trading_simulator - INFO - Running simulation for 30 seconds...
+2025-04-07 02:44:54,076 - py_rs_quant.simulation.simulator - INFO - Starting simulation in RANDOM mode for 30 seconds
+...
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - === Simulation Statistics ===
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Mode: RANDOM
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Duration: 30.12 seconds
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Orders generated: 153
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Orders per second: 5.08
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Trades executed: 87
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Trades per second: 2.89
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - Fill ratio: 56.86%
+2025-04-07 02:45:24,076 - py_rs_quant.simulation.simulator - INFO - BTCUSD price: 49889.69 (-0.22% change)
+2025-04-07 02:45:24,076 - trading_simulator - INFO - Summary statistics for BTCUSD:
+2025-04-07 02:45:24,076 - trading_simulator - INFO -   Total orders: 153
+2025-04-07 02:45:24,076 - trading_simulator - INFO -   Total trades: 87
+2025-04-07 02:45:24,076 - trading_simulator - INFO -   Fill ratio: 35.94%
+2025-04-07 02:45:24,076 - trading_simulator - INFO -   Volume: 4.32658973
+2025-04-07 02:45:24,076 - trading_simulator - INFO -   Final price: 49889.69
+2025-04-07 02:45:24,076 - trading_simulator - INFO -   Price change: -0.22%
+```
+
+Try different simulation modes:
+
+```bash
+# Mean-reverting market (prices tend to return to an average)
+trading-sim simulate --mode mean_reverting --duration 20 --volatility 0.01
+
+# Trending market (prices tend to move in a direction)
+trading-sim simulate --mode trending --duration 20 --volatility 0.007
+
+# Stress test (high volatility, high order rate)
+trading-sim simulate --mode stress_test --duration 20 --order-rate 10
+```
+
+### Performance Benchmark Demo
+
+Compare the performance of Python and Rust implementations:
+
+```bash
+# Run a benchmark with 5 iterations of 10,000 orders each
+trading-sim benchmark --iterations 5 --orders 10000
+```
+
+Sample output:
+```
+2025-04-07 02:21:37,678 - trading_simulator - INFO - Starting performance benchmark
+2025-04-07 02:21:37,678 - trading_simulator - INFO - Benchmarking PYTHON implementation
+2025-04-07 02:21:37,678 - trading_simulator - INFO -   Running iteration 1/5
+...
+2025-04-07 02:21:38,087 - trading_simulator - INFO -   PYTHON results:
+2025-04-07 02:21:38,087 - trading_simulator - INFO -     Average orders/sec: 1048635.67
+2025-04-07 02:21:38,087 - trading_simulator - INFO -     Average trades/sec: 0.00
+2025-04-07 02:21:38,087 - trading_simulator - INFO - Benchmarking RUST implementation
+...
+2025-04-07 02:21:38,087 - trading_simulator - INFO -   RUST results:
+2025-04-07 02:21:38,087 - trading_simulator - INFO -     Average orders/sec: 1228736.62
+2025-04-07 02:21:38,087 - trading_simulator - INFO -     Average trades/sec: 0.00
+2025-04-07 02:21:38,087 - trading_simulator - INFO - Benchmark comparison:
+2025-04-07 02:21:38,087 - trading_simulator - INFO -   Python mean latency: 0.001 ms
+2025-04-07 02:21:38,087 - trading_simulator - INFO -   Rust mean latency: 0.001 ms
+2025-04-07 02:21:38,087 - trading_simulator - INFO -   Improvement factor: 1.22x
+2025-04-07 02:21:38,087 - trading_simulator - INFO -   Improvement percent: 17.71%
+```
+
+This benchmark demonstrates the performance difference between the pure Python implementation and the Rust-accelerated version of the matching engine.
+
+### Save Results to File
+
+Both simulation and benchmark results can be saved to JSON files for further analysis:
+
+```bash
+# Save simulation results
+trading-sim simulate --duration 30 --output results/simulation.json
+
+# Save benchmark results
+trading-sim benchmark --iterations 3 --orders 50000 --output results/benchmark.json
+```
+
 ## API Endpoints
 
 The API provides the following main endpoints:

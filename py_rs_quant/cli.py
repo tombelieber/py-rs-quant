@@ -225,6 +225,7 @@ async def run_benchmark(args):
         
         # Run iterations
         iteration_results = []
+        latencies = []
         
         for i in range(args.iterations):
             logger.info(f"  Running iteration {i+1}/{args.iterations}")
@@ -268,6 +269,10 @@ async def run_benchmark(args):
             # Get trades
             trades = matching_engine.get_trades()
             
+            # Calculate per-order latency in ms
+            per_order_latency = (elapsed * 1000) / order_count
+            latencies.append(per_order_latency)
+            
             # Record iteration results
             iteration_result = {
                 "iteration": i + 1,
@@ -275,7 +280,8 @@ async def run_benchmark(args):
                 "trades_executed": len(trades),
                 "elapsed_time": elapsed,
                 "orders_per_second": order_count / elapsed,
-                "trades_per_second": len(trades) / elapsed if elapsed > 0 else 0
+                "trades_per_second": len(trades) / elapsed if elapsed > 0 else 0,
+                "latency_ms": per_order_latency
             }
             
             iteration_results.append(iteration_result)
@@ -283,7 +289,7 @@ async def run_benchmark(args):
             # Add latency measurement
             analyzer.add_latency_measurement(
                 f"{engine_type}_matching", 
-                (elapsed * 1000) / order_count  # Convert to ms per order
+                per_order_latency
             )
             
             # Allow some time between iterations
@@ -293,11 +299,36 @@ async def run_benchmark(args):
         avg_orders_per_second = sum(r["orders_per_second"] for r in iteration_results) / len(iteration_results)
         avg_trades_per_second = sum(r["trades_per_second"] for r in iteration_results) / len(iteration_results)
         
+        # Calculate latency statistics
+        latencies.sort()
+        min_latency = min(latencies)
+        max_latency = max(latencies)
+        avg_latency = sum(latencies) / len(latencies)
+        sum_latency = sum(latencies)
+        median_latency = latencies[len(latencies) // 2]
+        p99_idx = int(len(latencies) * 0.99)
+        p99_latency = latencies[p99_idx]
+        throughput = args.orders * args.iterations / sum(r["elapsed_time"] for r in iteration_results)
+        
         logger.info(f"  {engine_type.upper()} results:")
         logger.info(f"    Average orders/sec: {avg_orders_per_second:.2f}")
         logger.info(f"    Average trades/sec: {avg_trades_per_second:.2f}")
+        logger.info(f"    Latency (ms) - min: {min_latency:.3f}, max: {max_latency:.3f}, avg: {avg_latency:.3f}")
+        logger.info(f"    Latency (ms) - median: {median_latency:.3f}, p99: {p99_latency:.3f}")
+        logger.info(f"    Total latency sum (ms): {sum_latency:.3f}")
+        logger.info(f"    Overall throughput (ops/sec): {throughput:.2f}")
         
         benchmark_results[engine_type] = iteration_results
+        # Add detailed stats to results
+        benchmark_results[f"{engine_type}_stats"] = {
+            "min_latency": min_latency,
+            "max_latency": max_latency,
+            "avg_latency": avg_latency,
+            "sum_latency": sum_latency,
+            "median_latency": median_latency,
+            "p99_latency": p99_latency,
+            "throughput": throughput
+        }
     
     # Compare implementations
     comparison = analyzer.compare_python_vs_rust()
@@ -306,7 +337,17 @@ async def run_benchmark(args):
         "python_mean_latency": comparison["python_mean"],
         "rust_mean_latency": comparison["rust_mean"],
         "improvement_factor": comparison["improvement_factor"],
-        "improvement_percent": comparison["improvement_percent"]
+        "improvement_percent": comparison["improvement_percent"],
+        "python_min": benchmark_results["python_stats"]["min_latency"],
+        "rust_min": benchmark_results["rust_stats"]["min_latency"],
+        "python_max": benchmark_results["python_stats"]["max_latency"],
+        "rust_max": benchmark_results["rust_stats"]["max_latency"],
+        "python_median": benchmark_results["python_stats"]["median_latency"],
+        "rust_median": benchmark_results["rust_stats"]["median_latency"],
+        "python_p99": benchmark_results["python_stats"]["p99_latency"],
+        "rust_p99": benchmark_results["rust_stats"]["p99_latency"],
+        "python_throughput": benchmark_results["python_stats"]["throughput"],
+        "rust_throughput": benchmark_results["rust_stats"]["throughput"]
     }
     
     logger.info("Benchmark comparison:")
@@ -314,6 +355,12 @@ async def run_benchmark(args):
     logger.info(f"  Rust mean latency: {comparison['rust_mean']:.3f} ms")
     logger.info(f"  Improvement factor: {comparison['improvement_factor']:.2f}x")
     logger.info(f"  Improvement percent: {comparison['improvement_percent']:.2f}%")
+    logger.info("Detailed comparison:")
+    logger.info(f"  Min latency: Python {benchmark_results['comparison']['python_min']:.3f} ms vs Rust {benchmark_results['comparison']['rust_min']:.3f} ms")
+    logger.info(f"  Max latency: Python {benchmark_results['comparison']['python_max']:.3f} ms vs Rust {benchmark_results['comparison']['rust_max']:.3f} ms")
+    logger.info(f"  Median latency: Python {benchmark_results['comparison']['python_median']:.3f} ms vs Rust {benchmark_results['comparison']['rust_median']:.3f} ms")
+    logger.info(f"  p99 latency: Python {benchmark_results['comparison']['python_p99']:.3f} ms vs Rust {benchmark_results['comparison']['rust_p99']:.3f} ms")
+    logger.info(f"  Throughput: Python {benchmark_results['comparison']['python_throughput']:.2f} ops/s vs Rust {benchmark_results['comparison']['rust_throughput']:.2f} ops/s")
     
     # Save results to file if requested
     if args.output:
