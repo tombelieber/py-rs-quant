@@ -3,10 +3,12 @@ Python implementation of the matching engine.
 """
 from enum import Enum, auto
 import time
-from typing import Dict, List, Optional, Tuple, Union, Callable, Iterable
+from typing import Dict, List, Optional, Tuple, Union, Callable, Iterable, Any
 import heapq
 from collections import defaultdict
 from sortedcontainers import SortedDict  # For efficient order book management
+import numpy as np
+from numba import jit
 
 # For now, use a Python implementation only
 RUST_ENGINE_AVAILABLE = False
@@ -76,27 +78,72 @@ class PriceLevel:
     Represents a price level in the order book with multiple orders at the same price.
     Using this to avoid creating many small tuples during order matching.
     """
-    __slots__ = ['price', 'orders']
+    __slots__ = ['price', 'orders', 'total_qty_cache', 'is_dirty']
     
     def __init__(self, price: float):
         self.price = price
         self.orders = []  # List of orders at this price level
+        self.total_qty_cache = 0.0  # Cache for total quantity
+        self.is_dirty = True  # Flag to indicate if cache needs update
         
     def add_order(self, order: Order) -> None:
         self.orders.append(order)
+        self.total_qty_cache += order.remaining_quantity
         
     def remove_order(self, order_id: int) -> bool:
         for i, order in enumerate(self.orders):
             if order.id == order_id:
                 self.orders.pop(i)
+                self.is_dirty = True  # Invalidate cache
                 return True
         return False
         
+    def update_qty_cache(self) -> None:
+        if self.is_dirty:
+            self.total_qty_cache = sum(order.remaining_quantity for order in self.orders)
+            self.is_dirty = False
+        
     def total_quantity(self) -> float:
-        return sum(order.remaining_quantity for order in self.orders)
+        self.update_qty_cache()
+        return self.total_qty_cache
     
     def __repr__(self) -> str:
         return f"PriceLevel(price={self.price}, orders={len(self.orders)}, qty={self.total_quantity()})"
+
+
+# JIT-compiled functions for critical paths
+@jit(nopython=True)
+def calculate_trade_qty(buy_remaining: float, sell_remaining: float) -> float:
+    """Calculate trade quantity efficiently."""
+    return min(buy_remaining, sell_remaining)
+
+
+@jit(nopython=True)
+def calculate_price_stats(prices, quantities):
+    """Calculate price statistics efficiently."""
+    if len(prices) == 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+    
+    # Calculate weighted price
+    total_qty = np.sum(quantities)
+    if total_qty <= 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+    
+    weighted_price = np.sum(prices * quantities) / total_qty
+    
+    # Calculate other stats
+    min_price = np.min(prices)
+    max_price = np.max(prices)
+    mean_price = np.mean(prices)
+    
+    # Calculate weighted standard deviation
+    if len(prices) > 1:
+        variance = np.sum(quantities * (prices - weighted_price) ** 2) / total_qty
+        std_dev = np.sqrt(variance)
+    else:
+        std_dev = 0.0
+    
+    return min_price, max_price, mean_price, weighted_price, std_dev
 
 
 class MatchingEngine:
@@ -123,13 +170,46 @@ class MatchingEngine:
         self.trades = []
         self.trade_callback = None
         
-        # Trade recycling pool for reducing GC pressure
+        # Object recycling pools for reducing GC pressure
         self._trade_pool = []
-        self._max_pool_size = 1000
+        self._order_pool = []
+        self._max_trade_pool_size = 1000
+        self._max_order_pool_size = 2000
+        
+        # Price level caching
+        self._price_level_cache = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._max_cache_size = 100
+        
+        # Reusable arrays for order removal
+        self._orders_to_remove = []
     
     def register_trade_callback(self, callback: Callable) -> None:
         """Register a callback to be called when a trade is executed."""
         self.trade_callback = callback
+    
+    def get_order_from_pool(self, order_id: int, side: OrderSide, order_type: OrderType, 
+                           price: Optional[float], quantity: float, 
+                           timestamp: Optional[int] = None, symbol: Optional[str] = None) -> Order:
+        """Get an order object from the pool or create a new one."""
+        if self._order_pool:
+            order = self._order_pool.pop()
+            # Reset order properties
+            order.id = order_id
+            order.side = side
+            order.order_type = order_type
+            order.price = price
+            order.quantity = quantity
+            order.filled_quantity = 0.0
+            order.remaining_quantity = quantity
+            order.status = OrderStatus.NEW
+            order.timestamp = timestamp or int(time.time() * 1000)
+            order.symbol = symbol
+            return order
+        
+        # Create new if pool is empty
+        return Order(order_id, side, order_type, price, quantity, timestamp, symbol)
     
     def add_limit_order(self, side: OrderSide, price: float, quantity: float, timestamp: Optional[int] = None, symbol: Optional[str] = None) -> int:
         """Add a limit order to the order book."""
@@ -137,7 +217,8 @@ class MatchingEngine:
         order_id = self.next_order_id
         self.next_order_id += 1
         
-        order = Order(order_id, side, OrderType.LIMIT, price, quantity, ts, symbol)
+        # Get order from pool or create new
+        order = self.get_order_from_pool(order_id, side, OrderType.LIMIT, price, quantity, ts, symbol)
         self.orders_by_id[order_id] = order
         
         # Process the order (match or add to book)
@@ -151,7 +232,8 @@ class MatchingEngine:
         order_id = self.next_order_id
         self.next_order_id += 1
         
-        order = Order(order_id, side, OrderType.MARKET, None, quantity, ts, symbol)
+        # Get order from pool or create new
+        order = self.get_order_from_pool(order_id, side, OrderType.MARKET, None, quantity, ts, symbol)
         self.orders_by_id[order_id] = order
         
         # Process the order (match or add to book)
@@ -169,20 +251,63 @@ class MatchingEngine:
         Returns:
             List of order IDs created
         """
+        order_objects = []
         order_ids = []
+        
+        # Create all order objects first
+        current_timestamp = int(time.time() * 1000)
         for side, order_type, price, quantity, timestamp, symbol in orders:
-            ts = timestamp if timestamp is not None else int(time.time() * 1000)
+            ts = timestamp if timestamp is not None else current_timestamp
             order_id = self.next_order_id
             self.next_order_id += 1
             
-            order = Order(order_id, side, order_type, price, quantity, ts, symbol)
+            # Get order from pool or create new
+            order = self.get_order_from_pool(order_id, side, order_type, price, quantity, ts, symbol)
             self.orders_by_id[order_id] = order
+            order_objects.append(order)
             order_ids.append(order_id)
-            
-            # Process each order
-            self._process_order(order)
-            
+        
+        # Batch process orders using optimized matching
+        self.batch_match(order_objects)
+        
         return order_ids
+    
+    def batch_match(self, orders_to_match: List[Order]) -> None:
+        """
+        Pre-sort and batch match orders for better efficiency.
+        
+        Args:
+            orders_to_match: List of orders to match
+        """
+        # Group by side
+        buy_orders = [o for o in orders_to_match if o.side == OrderSide.BUY]
+        sell_orders = [o for o in orders_to_match if o.side == OrderSide.SELL]
+        
+        # Skip if no orders
+        if not buy_orders and not sell_orders:
+            return
+        
+        # Sort by priority (market orders first, then by price)
+        if buy_orders:
+            buy_orders.sort(key=lambda o: (
+                0 if o.order_type == OrderType.MARKET else 1,
+                -(o.price or float('-inf')),
+                o.timestamp
+            ))
+        
+        if sell_orders:
+            sell_orders.sort(key=lambda o: (
+                0 if o.order_type == OrderType.MARKET else 1,
+                o.price or float('inf'),
+                o.timestamp
+            ))
+        
+        # Process in optimized order
+        for order in buy_orders:
+            self._process_buy_order(order)
+        
+        for order in sell_orders:
+            self._process_sell_order(order)
     
     def _process_order(self, order: Order) -> None:
         """Process an order (match or add to book)."""
@@ -191,44 +316,106 @@ class MatchingEngine:
         else:  # SELL order
             self._process_sell_order(order)
     
+    def _get_or_create_price_level(self, price_dict: SortedDict, price: float, create_new: bool = True) -> Optional[PriceLevel]:
+        """
+        Get or create a price level with caching for hot price points.
+        
+        Args:
+            price_dict: Dictionary of price levels
+            price: Price to look up
+            create_new: Whether to create a new price level if not found
+            
+        Returns:
+            The price level or None if not found and create_new is False
+        """
+        # Check cache first
+        cache_key = (id(price_dict), price)
+        
+        if cache_key in self._price_level_cache:
+            self._cache_hits += 1
+            return self._price_level_cache[cache_key]
+        
+        self._cache_misses += 1
+        
+        # Not in cache, look in dictionary
+        if price in price_dict:
+            level = price_dict[price]
+        elif create_new:
+            level = PriceLevel(price)
+            price_dict[price] = level
+        else:
+            return None
+        
+        # Add to cache if not full
+        if len(self._price_level_cache) < self._max_cache_size:
+            self._price_level_cache[cache_key] = level
+        
+        return level
+    
     def _process_buy_order(self, order: Order) -> None:
         """Process a buy order efficiently."""
         # Try to match against sell orders
         if order.order_type == OrderType.MARKET:
             # Market orders match against any sell order
+            self._orders_to_remove.clear()
+            
             for price in self.sell_price_levels:
                 if order.remaining_quantity <= 0:
                     break
                     
-                price_level = self.sell_price_levels[price]
+                price_level = self._get_or_create_price_level(self.sell_price_levels, price, create_new=False)
+                if not price_level:
+                    continue
+                    
                 self._match_at_price_level(order, price_level)
                 
-                # Remove the price level if empty
+                # Mark for removal if empty
                 if not price_level.orders:
-                    del self.sell_price_levels[price]
+                    self._orders_to_remove.append(price)
+            
+            # Remove empty price levels in batch
+            for price in self._orders_to_remove:
+                del self.sell_price_levels[price]
+                # Remove from cache if present
+                cache_key = (id(self.sell_price_levels), price)
+                if cache_key in self._price_level_cache:
+                    del self._price_level_cache[cache_key]
+                    
         else:
             # Limit orders match only if price is acceptable
+            self._orders_to_remove.clear()
+            
             for price in self.sell_price_levels:
                 if price > order.price or order.remaining_quantity <= 0:
                     break
                     
-                price_level = self.sell_price_levels[price]
+                price_level = self._get_or_create_price_level(self.sell_price_levels, price, create_new=False)
+                if not price_level:
+                    continue
+                    
                 self._match_at_price_level(order, price_level)
                 
-                # Remove the price level if empty
+                # Mark for removal if empty
                 if not price_level.orders:
-                    del self.sell_price_levels[price]
+                    self._orders_to_remove.append(price)
+            
+            # Remove empty price levels in batch
+            for price in self._orders_to_remove:
+                del self.sell_price_levels[price]
+                # Remove from cache if present
+                cache_key = (id(self.sell_price_levels), price)
+                if cache_key in self._price_level_cache:
+                    del self._price_level_cache[cache_key]
         
         # If it's a limit order and not fully filled, add to the order book
         if order.order_type == OrderType.LIMIT and order.remaining_quantity > 0:
             neg_price = -order.price  # Negate for correct sorting (highest price first)
             
             # Get or create the price level
-            if neg_price not in self.buy_price_levels:
-                self.buy_price_levels[neg_price] = PriceLevel(order.price)
+            price_level = self._get_or_create_price_level(self.buy_price_levels, neg_price)
                 
             # Add the order to the price level
-            self.buy_price_levels[neg_price].add_order(order)
+            price_level.add_order(order)
             self.order_price_map[order.id] = neg_price
     
     def _process_sell_order(self, order: Order) -> None:
@@ -236,38 +423,64 @@ class MatchingEngine:
         # Try to match against buy orders
         if order.order_type == OrderType.MARKET:
             # Market orders match against any buy order
+            self._orders_to_remove.clear()
+            
             for neg_price in self.buy_price_levels:
                 if order.remaining_quantity <= 0:
                     break
                     
-                price_level = self.buy_price_levels[neg_price]
+                price_level = self._get_or_create_price_level(self.buy_price_levels, neg_price, create_new=False)
+                if not price_level:
+                    continue
+                    
                 self._match_at_price_level(price_level, order)
                 
-                # Remove the price level if empty
+                # Mark for removal if empty
                 if not price_level.orders:
-                    del self.buy_price_levels[neg_price]
+                    self._orders_to_remove.append(neg_price)
+            
+            # Remove empty price levels in batch
+            for neg_price in self._orders_to_remove:
+                del self.buy_price_levels[neg_price]
+                # Remove from cache if present
+                cache_key = (id(self.buy_price_levels), neg_price)
+                if cache_key in self._price_level_cache:
+                    del self._price_level_cache[cache_key]
+                    
         else:
             # Limit orders match only if price is acceptable
+            self._orders_to_remove.clear()
+            
             for neg_price in self.buy_price_levels:
                 price = -neg_price
                 if price < order.price or order.remaining_quantity <= 0:
                     break
                     
-                price_level = self.buy_price_levels[neg_price]
+                price_level = self._get_or_create_price_level(self.buy_price_levels, neg_price, create_new=False)
+                if not price_level:
+                    continue
+                    
                 self._match_at_price_level(price_level, order)
                 
-                # Remove the price level if empty
+                # Mark for removal if empty
                 if not price_level.orders:
-                    del self.buy_price_levels[neg_price]
+                    self._orders_to_remove.append(neg_price)
+            
+            # Remove empty price levels in batch
+            for neg_price in self._orders_to_remove:
+                del self.buy_price_levels[neg_price]
+                # Remove from cache if present
+                cache_key = (id(self.buy_price_levels), neg_price)
+                if cache_key in self._price_level_cache:
+                    del self._price_level_cache[cache_key]
         
         # If it's a limit order and not fully filled, add to the order book
         if order.order_type == OrderType.LIMIT and order.remaining_quantity > 0:
             # Get or create the price level
-            if order.price not in self.sell_price_levels:
-                self.sell_price_levels[order.price] = PriceLevel(order.price)
+            price_level = self._get_or_create_price_level(self.sell_price_levels, order.price)
                 
             # Add the order to the price level
-            self.sell_price_levels[order.price].add_order(order)
+            price_level.add_order(order)
             self.order_price_map[order.id] = order.price
     
     def _match_at_price_level(self, buy_order_or_level, sell_order_or_level) -> None:
@@ -285,21 +498,30 @@ class MatchingEngine:
             
             # Match orders in time priority
             i = 0
+            orders_to_remove = []  # Track indices to remove in a batch
+            
             while i < len(sell_level.orders) and buy_order.remaining_quantity > 0:
                 sell_order = sell_level.orders[i]
                 
-                # Calculate the trade quantity
-                trade_qty = min(buy_order.remaining_quantity, sell_order.remaining_quantity)
+                # Calculate the trade quantity using JIT-compiled function
+                trade_qty = calculate_trade_qty(buy_order.remaining_quantity, sell_order.remaining_quantity)
                 
                 # Execute the trade at the sell order price
                 self._execute_trade(buy_order, sell_order, sell_order.price, trade_qty)
                 
-                # Remove filled sell orders
+                # Mark filled sell orders for removal
                 if sell_order.status == OrderStatus.FILLED:
-                    sell_level.orders.pop(i)
-                    # Don't increment i since we removed an order
+                    orders_to_remove.append(i)
+                    # Don't increment i since we'll remove this item
                 else:
                     i += 1  # Move to next order
+            
+            # Remove filled orders in reverse order to maintain correct indices
+            for idx in reversed(orders_to_remove):
+                sell_level.orders.pop(idx)
+            
+            # Update the cached total quantity
+            sell_level.is_dirty = True
                     
         elif isinstance(sell_order_or_level, Order):
             # Single sell order against price level of buy orders
@@ -308,21 +530,30 @@ class MatchingEngine:
             
             # Match orders in time priority
             i = 0
+            orders_to_remove = []  # Track indices to remove in a batch
+            
             while i < len(buy_level.orders) and sell_order.remaining_quantity > 0:
                 buy_order = buy_level.orders[i]
                 
-                # Calculate the trade quantity
-                trade_qty = min(buy_order.remaining_quantity, sell_order.remaining_quantity)
+                # Calculate the trade quantity using JIT-compiled function
+                trade_qty = calculate_trade_qty(buy_order.remaining_quantity, sell_order.remaining_quantity)
                 
                 # Execute the trade at the buy order price
                 self._execute_trade(buy_order, sell_order, buy_order.price, trade_qty)
                 
-                # Remove filled buy orders
+                # Mark filled buy orders for removal
                 if buy_order.status == OrderStatus.FILLED:
-                    buy_level.orders.pop(i)
-                    # Don't increment i since we removed an order
+                    orders_to_remove.append(i)
+                    # Don't increment i since we'll remove this item
                 else:
                     i += 1  # Move to next order
+            
+            # Remove filled orders in reverse order to maintain correct indices
+            for idx in reversed(orders_to_remove):
+                buy_level.orders.pop(idx)
+            
+            # Update the cached total quantity
+            buy_level.is_dirty = True
     
     def _execute_trade(self, buy_order: Order, sell_order: Order, price: float, quantity: float) -> None:
         """Execute a trade between a buy and sell order."""
@@ -388,30 +619,48 @@ class MatchingEngine:
         
         # Determine which book to search
         if order.side == OrderSide.BUY:
-            price_level = self.buy_price_levels.get(price)
+            price_level = self._get_or_create_price_level(self.buy_price_levels, price, create_new=False)
             if price_level and price_level.remove_order(order_id):
                 # If the price level is now empty, remove it
                 if not price_level.orders:
                     del self.buy_price_levels[price]
+                    # Also remove from cache
+                    cache_key = (id(self.buy_price_levels), price)
+                    if cache_key in self._price_level_cache:
+                        del self._price_level_cache[cache_key]
                     
                 # Update order status
                 order.status = OrderStatus.CANCELLED
                 
+                # Add to order pool for reuse
+                if len(self._order_pool) < self._max_order_pool_size:
+                    self._order_pool.append(order)
+                
                 # Remove from lookups
                 del self.order_price_map[order_id]
+                del self.orders_by_id[order_id]
                 return True
         else:  # SELL order
-            price_level = self.sell_price_levels.get(price)
+            price_level = self._get_or_create_price_level(self.sell_price_levels, price, create_new=False)
             if price_level and price_level.remove_order(order_id):
                 # If the price level is now empty, remove it
                 if not price_level.orders:
                     del self.sell_price_levels[price]
+                    # Also remove from cache
+                    cache_key = (id(self.sell_price_levels), price)
+                    if cache_key in self._price_level_cache:
+                        del self._price_level_cache[cache_key]
                     
                 # Update order status
                 order.status = OrderStatus.CANCELLED
                 
+                # Add to order pool for reuse
+                if len(self._order_pool) < self._max_order_pool_size:
+                    self._order_pool.append(order)
+                
                 # Remove from lookups
                 del self.order_price_map[order_id]
+                del self.orders_by_id[order_id]
                 return True
                 
         return False
@@ -434,6 +683,85 @@ class MatchingEngine:
             
         return (buy_tuples, sell_tuples)
     
+    def get_price_statistics(self) -> Dict[str, Any]:
+        """
+        Calculate price statistics for the order book using numpy.
+        
+        Returns:
+            Dictionary of price statistics
+        """
+        # Extract prices and quantities from both sides of the book
+        buy_prices = []
+        buy_quantities = []
+        for neg_price, price_level in self.buy_price_levels.items():
+            price = -neg_price  # Convert back to positive
+            buy_prices.append(price)
+            buy_quantities.append(price_level.total_quantity())
+            
+        sell_prices = []
+        sell_quantities = []
+        for price, price_level in self.sell_price_levels.items():
+            sell_prices.append(price)
+            sell_quantities.append(price_level.total_quantity())
+            
+        # Use numpy for calculations if we have enough data
+        if len(buy_prices) > 0 or len(sell_prices) > 0:
+            # Convert to numpy arrays
+            if buy_prices:
+                buy_prices_np = np.array(buy_prices)
+                buy_quantities_np = np.array(buy_quantities)
+                buy_min, buy_max, buy_mean, buy_weighted, buy_std = calculate_price_stats(buy_prices_np, buy_quantities_np)
+            else:
+                buy_min = buy_max = buy_mean = buy_weighted = buy_std = 0.0
+                
+            if sell_prices:
+                sell_prices_np = np.array(sell_prices)
+                sell_quantities_np = np.array(sell_quantities)
+                sell_min, sell_max, sell_mean, sell_weighted, sell_std = calculate_price_stats(sell_prices_np, sell_quantities_np)
+            else:
+                sell_min = sell_max = sell_mean = sell_weighted = sell_std = 0.0
+                
+            # Calculate midpoint if both sides have orders
+            if buy_prices and sell_prices:
+                best_bid = max(buy_prices)
+                best_ask = min(sell_prices)
+                midpoint = (best_bid + best_ask) / 2
+                spread = best_ask - best_bid
+            else:
+                midpoint = 0.0
+                spread = 0.0
+                
+            return {
+                "buy_side": {
+                    "min": buy_min,
+                    "max": buy_max,
+                    "mean": buy_mean,
+                    "weighted_mean": buy_weighted,
+                    "std_dev": buy_std,
+                    "depth": len(buy_prices),
+                    "total_quantity": sum(buy_quantities)
+                },
+                "sell_side": {
+                    "min": sell_min,
+                    "max": sell_max,
+                    "mean": sell_mean,
+                    "weighted_mean": sell_weighted,
+                    "std_dev": sell_std,
+                    "depth": len(sell_prices),
+                    "total_quantity": sum(sell_quantities)
+                },
+                "midpoint": midpoint,
+                "spread": spread
+            }
+        else:
+            # Return default values if no prices
+            return {
+                "buy_side": {"min": 0.0, "max": 0.0, "mean": 0.0, "weighted_mean": 0.0, "std_dev": 0.0, "depth": 0, "total_quantity": 0.0},
+                "sell_side": {"min": 0.0, "max": 0.0, "mean": 0.0, "weighted_mean": 0.0, "std_dev": 0.0, "depth": 0, "total_quantity": 0.0},
+                "midpoint": 0.0,
+                "spread": 0.0
+            }
+    
     def get_order(self, order_id: int) -> Optional[Order]:
         """Get an order by its ID."""
         return self.orders_by_id.get(order_id)
@@ -448,10 +776,31 @@ class MatchingEngine:
         Call this after processing trades to return them to the pool.
         """
         # Only recycle if we have space in the pool
-        space_left = self._max_pool_size - len(self._trade_pool)
+        space_left = self._max_trade_pool_size - len(self._trade_pool)
         if space_left <= 0:
             return
             
         # Add trades to the pool
         for trade in to_recycle[-space_left:]:
-            self._trade_pool.append(trade) 
+            self._trade_pool.append(trade)
+    
+    def clear_caches(self) -> None:
+        """
+        Clear caches to free memory.
+        Call this periodically if memory usage is a concern.
+        """
+        self._price_level_cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+        
+    def get_cache_stats(self) -> Dict[str, int]:
+        """Get statistics about cache performance."""
+        return {
+            "cache_hits": self._cache_hits,
+            "cache_misses": self._cache_misses,
+            "hit_ratio": self._cache_hits / (self._cache_hits + self._cache_misses) if (self._cache_hits + self._cache_misses) > 0 else 0.0,
+            "cache_size": len(self._price_level_cache),
+            "max_cache_size": self._max_cache_size,
+            "order_pool_size": len(self._order_pool),
+            "trade_pool_size": len(self._trade_pool)
+        } 
