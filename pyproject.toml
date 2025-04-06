@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-trading-sim = "src.python.cli:main"
+trading-sim = "py_rs_quant.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -35,7 +35,7 @@ dev = [
 
 [tool.maturin]
 module-name = "matching_engine"
-python-source = "src/python"
+python-source = "."
 features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
