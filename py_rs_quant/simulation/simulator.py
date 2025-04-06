@@ -10,8 +10,8 @@ import logging
 
 import numpy as np
 
-from src.python.matching_engine.python_engine import MatchingEngine, OrderSide, OrderType, Order, Trade
-from src.python.risk_management.risk_manager import RiskManager, RiskCheckResult
+from py_rs_quant.core.engine import MatchingEngine, OrderSide, OrderType, Order, Trade
+from py_rs_quant.risk.manager import RiskManager, RiskCheckResult
 
 logger = logging.getLogger(__name__)
 

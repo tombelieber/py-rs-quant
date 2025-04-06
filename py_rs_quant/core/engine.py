@@ -1,18 +1,13 @@
 """
-Python wrapper for the Rust matching engine.
+Python implementation of the matching engine.
 """
 from enum import Enum, auto
 import time
 from typing import Dict, List, Optional, Tuple, Union
+import heapq
 
-# Will import the Rust module once it's built
-try:
-    from matching_engine import PyOrderBook, PyOrderSide, PyOrderType, PyOrderStatus, PyTrade
-    RUST_ENGINE_AVAILABLE = True
-except ImportError:
-    print("Warning: Rust matching engine not available. Using Python implementation.")
-    RUST_ENGINE_AVAILABLE = False
-
+# For now, use a Python implementation only
+RUST_ENGINE_AVAILABLE = False
 
 class OrderSide(Enum):
     BUY = 1
@@ -87,82 +82,176 @@ class Trade:
 
 class MatchingEngine:
     """
-    Matching Engine class that wraps the Rust implementation if available,
-    otherwise falls back to a Python implementation.
+    Matching Engine class for order matching.
     """
     
-    def __init__(self, use_rust: bool = True):
-        self.use_rust = use_rust and RUST_ENGINE_AVAILABLE
-        
-        if self.use_rust:
-            self._engine = PyOrderBook()
-            # Map Python enums to Rust enums
-            self._py_to_rust_side = {
-                OrderSide.BUY: PyOrderSide.Buy,
-                OrderSide.SELL: PyOrderSide.Sell
-            }
-        else:
-            # We'll implement a Python version later if needed
-            # For now, we'll raise an error if Rust is not available
-            if not RUST_ENGINE_AVAILABLE:
-                raise NotImplementedError("Python matching engine not implemented yet. Install Rust engine.")
+    def __init__(self, use_rust: bool = False):
+        # For now, ignore use_rust parameter since we're using Python implementation
+        self.use_rust = False
+        self.next_order_id = 1
+        self.next_trade_id = 1
+        self.buy_orders = []  # List of (price, timestamp, order) tuples for buy orders, price high to low
+        self.sell_orders = []  # List of (price, timestamp, order) tuples for sell orders, price low to high
+        self.trades = []
     
     def add_limit_order(self, side: OrderSide, price: float, quantity: float, timestamp: Optional[int] = None) -> int:
         """Add a limit order to the order book."""
         ts = timestamp if timestamp is not None else int(time.time() * 1000)
+        order_id = self.next_order_id
+        self.next_order_id += 1
         
-        if self.use_rust:
-            rust_side = self._py_to_rust_side[side]
-            return self._engine.add_limit_order(rust_side, price, quantity, ts)
-        else:
-            # Python implementation would go here
-            raise NotImplementedError("Python matching engine not implemented yet.")
+        order = Order(order_id, side, OrderType.LIMIT, price, quantity, ts)
+        
+        # Process the order (match or add to book)
+        self._process_order(order)
+        
+        return order_id
     
     def add_market_order(self, side: OrderSide, quantity: float, timestamp: Optional[int] = None) -> int:
         """Add a market order to the order book."""
         ts = timestamp if timestamp is not None else int(time.time() * 1000)
+        order_id = self.next_order_id
+        self.next_order_id += 1
         
-        if self.use_rust:
-            rust_side = self._py_to_rust_side[side]
-            return self._engine.add_market_order(rust_side, quantity, ts)
+        order = Order(order_id, side, OrderType.MARKET, None, quantity, ts)
+        
+        # Process the order (match or add to book)
+        self._process_order(order)
+        
+        return order_id
+    
+    def _process_order(self, order: Order) -> None:
+        """Process an order (match or add to book)."""
+        if order.side == OrderSide.BUY:
+            # Try to match against sell orders
+            while order.remaining_quantity > 0 and self.sell_orders:
+                # For market orders, match against any sell order
+                # For limit orders, match only if the price is acceptable
+                if (order.order_type == OrderType.MARKET or 
+                    (order.order_type == OrderType.LIMIT and order.price >= self.sell_orders[0][0])):
+                    
+                    _, _, match_order = self.sell_orders[0]
+                    
+                    # Calculate the trade quantity
+                    trade_qty = min(order.remaining_quantity, match_order.remaining_quantity)
+                    
+                    # Execute the trade at the sell order price
+                    self._execute_trade(order, match_order, match_order.price, trade_qty)
+                    
+                    # Remove filled sell orders
+                    if match_order.status == OrderStatus.FILLED:
+                        heapq.heappop(self.sell_orders)
+                else:
+                    # No more matches possible
+                    break
+                    
+            # If it's a limit order and not fully filled, add to the order book
+            if order.order_type == OrderType.LIMIT and order.remaining_quantity > 0:
+                # For buy orders, use negative price for the heap to get highest first
+                heapq.heappush(self.buy_orders, (-order.price, order.timestamp, order))
+                
+        else:  # SELL order
+            # Try to match against buy orders
+            while order.remaining_quantity > 0 and self.buy_orders:
+                # For market orders, match against any buy order
+                # For limit orders, match only if the price is acceptable
+                if (order.order_type == OrderType.MARKET or 
+                    (order.order_type == OrderType.LIMIT and order.price <= -self.buy_orders[0][0])):
+                    
+                    _, _, match_order = self.buy_orders[0]
+                    
+                    # Calculate the trade quantity
+                    trade_qty = min(order.remaining_quantity, match_order.remaining_quantity)
+                    
+                    # Execute the trade at the buy order price
+                    self._execute_trade(match_order, order, match_order.price, trade_qty)
+                    
+                    # Remove filled buy orders
+                    if match_order.status == OrderStatus.FILLED:
+                        heapq.heappop(self.buy_orders)
+                else:
+                    # No more matches possible
+                    break
+            
+            # If it's a limit order and not fully filled, add to the order book
+            if order.order_type == OrderType.LIMIT and order.remaining_quantity > 0:
+                heapq.heappush(self.sell_orders, (order.price, order.timestamp, order))
+    
+    def _execute_trade(self, buy_order: Order, sell_order: Order, price: float, quantity: float) -> None:
+        """Execute a trade between a buy and sell order."""
+        # Update the orders
+        buy_order.filled_quantity += quantity
+        sell_order.filled_quantity += quantity
+        
+        # Update order statuses
+        if buy_order.filled_quantity >= buy_order.quantity:
+            buy_order.status = OrderStatus.FILLED
         else:
-            # Python implementation would go here
-            raise NotImplementedError("Python matching engine not implemented yet.")
+            buy_order.status = OrderStatus.PARTIALLY_FILLED
+            
+        if sell_order.filled_quantity >= sell_order.quantity:
+            sell_order.status = OrderStatus.FILLED
+        else:
+            sell_order.status = OrderStatus.PARTIALLY_FILLED
+            
+        # Create a trade record
+        trade = Trade(
+            trade_id=self.next_trade_id,
+            buy_order_id=buy_order.id,
+            sell_order_id=sell_order.id,
+            price=price,
+            quantity=quantity
+        )
+        self.next_trade_id += 1
+        
+        # Add to trades list
+        self.trades.append(trade)
     
     def cancel_order(self, order_id: int) -> bool:
         """Cancel an order by its ID."""
-        if self.use_rust:
-            return self._engine.cancel_order(order_id)
-        else:
-            # Python implementation would go here
-            raise NotImplementedError("Python matching engine not implemented yet.")
+        # Search in buy orders
+        for i, (_, _, order) in enumerate(self.buy_orders):
+            if order.id == order_id:
+                order.status = OrderStatus.CANCELLED
+                self.buy_orders.pop(i)
+                heapq.heapify(self.buy_orders)  # Re-establish heap property
+                return True
+                
+        # Search in sell orders
+        for i, (_, _, order) in enumerate(self.sell_orders):
+            if order.id == order_id:
+                order.status = OrderStatus.CANCELLED
+                self.sell_orders.pop(i)
+                heapq.heapify(self.sell_orders)  # Re-establish heap property
+                return True
+                
+        return False
     
     def get_order_book_snapshot(self) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
         """
         Get a snapshot of the order book.
         Returns a tuple of (buy_orders, sell_orders), where each is a list of (price, quantity) tuples.
         """
-        if self.use_rust:
-            return self._engine.get_order_book_snapshot()
-        else:
-            # Python implementation would go here
-            raise NotImplementedError("Python matching engine not implemented yet.")
+        # Combine quantities at the same price level for buy orders
+        buy_levels = {}
+        for neg_price, _, order in self.buy_orders:
+            price = -neg_price  # Convert back to positive
+            buy_levels[price] = buy_levels.get(price, 0) + order.remaining_quantity
+            
+        # Combine quantities at the same price level for sell orders
+        sell_levels = {}
+        for price, _, order in self.sell_orders:
+            sell_levels[price] = sell_levels.get(price, 0) + order.remaining_quantity
+            
+        # Convert to sorted lists of (price, quantity) tuples
+        buy_tuples = [(price, qty) for price, qty in buy_levels.items()]
+        buy_tuples.sort(reverse=True)  # Sort by price, highest first
+        
+        sell_tuples = [(price, qty) for price, qty in sell_levels.items()]
+        sell_tuples.sort()  # Sort by price, lowest first
+        
+        return (buy_tuples, sell_tuples)
     
     def get_trades(self) -> List[Trade]:
         """Get all trades that have occurred."""
-        if self.use_rust:
-            rust_trades = self._engine.get_trades()
-            # Convert Rust trades to Python trades
-            return [
-                Trade(
-                    trade_id=t.id,
-                    buy_order_id=t.buy_order_id,
-                    sell_order_id=t.sell_order_id,
-                    price=t.price,
-                    quantity=t.quantity,
-                    timestamp=t.timestamp
-                ) for t in rust_trades
-            ]
-        else:
-            # Python implementation would go here
-            raise NotImplementedError("Python matching engine not implemented yet.") 
+        return self.trades 

@@ -69,9 +69,18 @@ trading-sim simulate --duration 60 --symbols BTCUSD,ETHUSD
 # Run a performance benchmark
 trading-sim benchmark --iterations 5 --orders 10000
 
-# Start the API server
+# Start the API server (alternative method, prefer trading-api for better stability)
 trading-sim api --host 127.0.0.1 --port 8000
 ```
+
+### API Server
+
+```bash
+# Start the API server (recommended method)
+trading-api --host 127.0.0.1 --port 8000
+```
+
+Once the server is running, you can access the API documentation at http://127.0.0.1:8000/docs
 
 ### Python API
 
