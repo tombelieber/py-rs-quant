@@ -40,7 +40,7 @@ py-rs-quant/
 ## Features
 
 - High-performance order matching engine
-- Python implementation with Rust acceleration (in development)
+- Python implementation with Rust acceleration (fully functional)
 - Comprehensive trading simulation tools
 - Risk management capabilities
 - Advanced analytics for performance evaluation
@@ -51,7 +51,7 @@ py-rs-quant/
 ### Prerequisites
 
 - Python 3.8+
-- Rust (optional, for Rust engine)
+- Rust (for Rust engine acceleration)
 
 ### Install from source
 
@@ -71,15 +71,37 @@ uv pip install -e .
 pip install -e .
 ```
 
+### Enable Rust acceleration (recommended)
+
+For better performance, build and install the Rust matching engine:
+
+```bash
+# Build the Rust matching engine
+cd matching_engine
+cargo build --release
+
+# Install using maturin
+maturin develop --release
+
+# Go back to main directory
+cd ..
+
+# Reinstall the package to ensure Rust is properly detected
+uv pip install -e .
+```
+
 ## Usage
 
 ### CLI
 
 ```bash
-# Run a market simulation
+# Run a market simulation with Rust acceleration (default)
 trading-sim simulate --duration 60 --symbols BTCUSD,ETHUSD
 
-# Run a performance benchmark
+# Run a market simulation with Python implementation only
+trading-sim simulate --duration 60 --symbols BTCUSD,ETHUSD --no-use-rust
+
+# Run a performance benchmark comparing Python and Rust
 trading-sim benchmark --iterations 5 --orders 10000
 
 # Start the API server (alternative method)
@@ -102,7 +124,7 @@ import asyncio
 from py_rs_quant import MatchingEngine, MarketSimulator, RiskManager, SimulationMode
 
 async def run_simulation():
-    engine = MatchingEngine(use_rust=False)  # Rust engine integration in progress
+    engine = MatchingEngine(use_rust=True)  # Rust engine is now fully integrated
     risk_manager = RiskManager()
     simulator = MarketSimulator(
         matching_engine=engine,
@@ -127,8 +149,11 @@ The trading simulator allows you to run market simulations with different parame
 # Activate virtual environment
 source venv/bin/activate
 
-# Run a basic simulation for 30 seconds with default parameters
+# Run a basic simulation for 30 seconds with default parameters (using Rust)
 trading-sim simulate --duration 30 --symbols BTCUSD
+
+# Run with Python implementation only
+trading-sim simulate --duration 30 --symbols BTCUSD --no-use-rust
 ```
 
 Sample output:
