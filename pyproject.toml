@@ -1,6 +1,6 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
-build-backend = "maturin"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "py-rs-quant"
@@ -22,7 +22,8 @@ dependencies = [
 ]
 
 [project.scripts]
-trading-sim = "py_rs_quant.cli:main"
+trading-sim = "py_rs_quant.cli:run_cli"
+trading-api = "py_rs_quant.api.run_api:run_api"
 
 [project.optional-dependencies]
 dev = [
@@ -33,10 +34,8 @@ dev = [
   "pytest-asyncio>=0.21.0",
 ]
 
-[tool.maturin]
-module-name = "matching_engine"
-python-source = "."
-features = ["pyo3/extension-module"]
+[tool.setuptools]
+packages = ["py_rs_quant"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

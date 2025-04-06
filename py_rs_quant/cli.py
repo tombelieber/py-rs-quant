@@ -323,17 +323,17 @@ async def run_benchmark(args):
     return 0
 
 
-async def start_api_server(args):
+def start_api_server(args):
     """Start the REST API server."""
-    import uvicorn
-    from py_rs_quant.api.app import app
+    # Import here to avoid circular imports
+    from py_rs_quant.api.run_api import run_api
     
-    logger.info(f"Starting API server at http://{args.host}:{args.port}")
+    # Replace arguments with the ones from this command
+    import sys
+    sys.argv = [sys.argv[0], "--host", args.host, "--port", str(args.port)]
     
-    config = uvicorn.Config(app, host=args.host, port=args.port)
-    server = uvicorn.Server(config)
-    
-    await server.serve()
+    # Run the API server
+    run_api()
     
     return 0
 
@@ -347,11 +347,21 @@ async def main():
     elif args.command == "benchmark":
         return await run_benchmark(args)
     elif args.command == "api":
-        return await start_api_server(args)
+        # Run directly without await since it's not async anymore
+        return start_api_server(args)
     else:
-        logger.error("No command specified. Use --help for usage information.")
+        # If no command specified, show help
+        parse_args(["--help"])
         return 1
 
 
+# Add this function for script execution
+def run_cli():
+    """Run the CLI from a script entry point."""
+    import asyncio
+    asyncio.run(main())
+
+
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main()) 
