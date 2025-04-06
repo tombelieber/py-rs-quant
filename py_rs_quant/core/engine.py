@@ -36,7 +36,8 @@ class Order:
                  order_type: OrderType, 
                  price: Optional[float], 
                  quantity: float, 
-                 timestamp: Optional[int] = None):
+                 timestamp: Optional[int] = None,
+                 symbol: Optional[str] = None):
         self.id = order_id
         self.side = side
         self.order_type = order_type
@@ -45,6 +46,7 @@ class Order:
         self.filled_quantity = 0.0
         self.status = OrderStatus.NEW
         self.timestamp = timestamp if timestamp is not None else int(time.time() * 1000)
+        self.symbol = symbol
     
     @property
     def remaining_quantity(self) -> float:
@@ -54,7 +56,7 @@ class Order:
     def __repr__(self) -> str:
         return (f"Order(id={self.id}, side={self.side}, type={self.order_type}, "
                 f"price={self.price}, quantity={self.quantity}, filled={self.filled_quantity}, "
-                f"status={self.status})")
+                f"status={self.status}, symbol={self.symbol})")
 
 
 class Trade:
@@ -66,18 +68,20 @@ class Trade:
                  sell_order_id: int, 
                  price: float, 
                  quantity: float, 
-                 timestamp: Optional[int] = None):
+                 timestamp: Optional[int] = None,
+                 symbol: Optional[str] = None):
         self.id = trade_id
         self.buy_order_id = buy_order_id
         self.sell_order_id = sell_order_id
         self.price = price
         self.quantity = quantity
         self.timestamp = timestamp if timestamp is not None else int(time.time() * 1000)
+        self.symbol = symbol
     
     def __repr__(self) -> str:
         return (f"Trade(id={self.id}, buy_order_id={self.buy_order_id}, "
                 f"sell_order_id={self.sell_order_id}, price={self.price}, "
-                f"quantity={self.quantity}, timestamp={self.timestamp})")
+                f"quantity={self.quantity}, timestamp={self.timestamp}, symbol={self.symbol})")
 
 
 class MatchingEngine:
@@ -94,26 +98,26 @@ class MatchingEngine:
         self.sell_orders = []  # List of (price, timestamp, order) tuples for sell orders, price low to high
         self.trades = []
     
-    def add_limit_order(self, side: OrderSide, price: float, quantity: float, timestamp: Optional[int] = None) -> int:
+    def add_limit_order(self, side: OrderSide, price: float, quantity: float, timestamp: Optional[int] = None, symbol: Optional[str] = None) -> int:
         """Add a limit order to the order book."""
         ts = timestamp if timestamp is not None else int(time.time() * 1000)
         order_id = self.next_order_id
         self.next_order_id += 1
         
-        order = Order(order_id, side, OrderType.LIMIT, price, quantity, ts)
+        order = Order(order_id, side, OrderType.LIMIT, price, quantity, ts, symbol)
         
         # Process the order (match or add to book)
         self._process_order(order)
         
         return order_id
     
-    def add_market_order(self, side: OrderSide, quantity: float, timestamp: Optional[int] = None) -> int:
+    def add_market_order(self, side: OrderSide, quantity: float, timestamp: Optional[int] = None, symbol: Optional[str] = None) -> int:
         """Add a market order to the order book."""
         ts = timestamp if timestamp is not None else int(time.time() * 1000)
         order_id = self.next_order_id
         self.next_order_id += 1
         
-        order = Order(order_id, side, OrderType.MARKET, None, quantity, ts)
+        order = Order(order_id, side, OrderType.MARKET, None, quantity, ts, symbol)
         
         # Process the order (match or add to book)
         self._process_order(order)
@@ -200,7 +204,8 @@ class MatchingEngine:
             buy_order_id=buy_order.id,
             sell_order_id=sell_order.id,
             price=price,
-            quantity=quantity
+            quantity=quantity,
+            symbol=buy_order.symbol
         )
         self.next_trade_id += 1
         

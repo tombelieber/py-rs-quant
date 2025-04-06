@@ -241,9 +241,9 @@ class MarketSimulator:
         
         try:
             if is_market_order:
-                order_id = self.matching_engine.add_market_order(side, order_size, timestamp)
+                order_id = self.matching_engine.add_market_order(side, order_size, timestamp, symbol)
             else:
-                order_id = self.matching_engine.add_limit_order(side, price, order_size, timestamp)
+                order_id = self.matching_engine.add_limit_order(side, price, order_size, timestamp, symbol)
             
             # Call the order callback if registered
             if self.on_order_callback:
@@ -253,7 +253,8 @@ class MarketSimulator:
                     order_type=order_type,
                     price=price,
                     quantity=order_size,
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    symbol=symbol
                 )
                 self.on_order_callback(order)
         except Exception as e:
