@@ -11,10 +11,21 @@ import numpy as np
 from numba import jit
 import logging
 
-# For now, use a Python implementation only
-RUST_ENGINE_AVAILABLE = False
+# Ensure we have the matching_engine module imported inside the namespace
+import matching_engine
 
 logger = logging.getLogger(__name__)
+
+# For now, use a Python implementation only
+try:
+    from matching_engine import PyOrderBook
+    RUST_ENGINE_AVAILABLE = True
+except ImportError:
+    RUST_ENGINE_AVAILABLE = False
+
+# Add this for better logging
+if not RUST_ENGINE_AVAILABLE:
+    logger.warning("Rust matching engine not available, using Python implementation. For better performance, install the Rust matching engine.")
 
 class OrderSide(Enum):
     BUY = 1
@@ -156,9 +167,17 @@ class MatchingEngine:
     """
     
     def __init__(self, use_rust: bool = False):
-        # For now, ignore use_rust parameter since we're using Python implementation
-        self.use_rust = False
-        logger.info(f"Initializing MatchingEngine (use_rust={use_rust}, but using Python implementation)")
+        self.use_rust = use_rust and RUST_ENGINE_AVAILABLE
+        
+        if use_rust and not RUST_ENGINE_AVAILABLE:
+            logger.warning("Rust implementation requested but not available. Using Python implementation instead.")
+        
+        logger.info(f"Initializing MatchingEngine (use_rust={self.use_rust})")
+        
+        if self.use_rust:
+            # Initialize Rust implementation
+            self.rust_engine = PyOrderBook()
+        
         self.next_order_id = 1
         self.next_trade_id = 1
         
@@ -224,6 +243,21 @@ class MatchingEngine:
         
         logger.debug(f"Adding limit order: id={order_id}, side={side.name}, price={price}, qty={quantity}, symbol={symbol}")
         
+        if self.use_rust:
+            # Use Rust implementation
+            try:
+                # Convert OrderSide enum to PyOrderSide
+                rust_side = matching_engine.PyOrderSide.Buy if side == OrderSide.BUY else matching_engine.PyOrderSide.Sell
+                # The Rust implementation doesn't use the symbol in the add_limit_order method
+                rust_order_id = self.rust_engine.add_limit_order(rust_side, price, quantity, ts)
+                logger.debug(f"Rust engine returned order ID: {rust_order_id}")
+                return rust_order_id
+            except Exception as e:
+                logger.error(f"Error using Rust engine for limit order: {e}")
+                # Fall back to Python implementation
+                logger.warning("Falling back to Python implementation")
+        
+        # Python implementation
         # Get order from pool or create new
         order = self.get_order_from_pool(order_id, side, OrderType.LIMIT, price, quantity, ts, symbol)
         self.orders_by_id[order_id] = order
@@ -247,6 +281,21 @@ class MatchingEngine:
         
         logger.debug(f"Adding market order: id={order_id}, side={side.name}, qty={quantity}, symbol={symbol}")
         
+        if self.use_rust:
+            # Use Rust implementation
+            try:
+                # Convert OrderSide enum to PyOrderSide
+                rust_side = matching_engine.PyOrderSide.Buy if side == OrderSide.BUY else matching_engine.PyOrderSide.Sell
+                # The Rust implementation doesn't use the symbol in the add_market_order method
+                rust_order_id = self.rust_engine.add_market_order(rust_side, quantity, ts)
+                logger.debug(f"Rust engine returned order ID: {rust_order_id}")
+                return rust_order_id
+            except Exception as e:
+                logger.error(f"Error using Rust engine for market order: {e}")
+                # Fall back to Python implementation
+                logger.warning("Falling back to Python implementation")
+        
+        # Python implementation
         # Get order from pool or create new
         order = self.get_order_from_pool(order_id, side, OrderType.MARKET, None, quantity, ts, symbol)
         self.orders_by_id[order_id] = order
@@ -681,23 +730,78 @@ class MatchingEngine:
                 
         return False
     
-    def get_order_book_snapshot(self) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
+    def get_order_book_snapshot(self, symbol: Optional[str] = None) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
         """
-        Get a snapshot of the order book.
-        Returns a tuple of (buy_orders, sell_orders), where each is a list of (price, quantity) tuples.
+        Get a snapshot of the current order book.
+        
+        Args:
+            symbol: Optional symbol to filter by
+            
+        Returns:
+            Tuple of (buy_orders, sell_orders) where each is a list of (price, quantity) tuples
         """
-        # For buy orders, combine quantities at each price level
-        buy_tuples = []
-        for neg_price, price_level in self.buy_price_levels.items():
-            price = -neg_price  # Convert back to positive
-            buy_tuples.append((price, price_level.total_quantity()))
+        if self.use_rust:
+            try:
+                # The Rust implementation doesn't take a symbol parameter for get_order_book_snapshot
+                buy_levels, sell_levels = self.rust_engine.get_order_book_snapshot()
+                return buy_levels, sell_levels
+            except Exception as e:
+                logger.error(f"Error getting order book from Rust engine: {e}")
+                # Fall back to Python implementation
+                logger.warning("Falling back to Python implementation for order book snapshot")
+        
+        # Python implementation
+        buy_orders = []
+        for neg_price in self.buy_price_levels:
+            price_level = self.buy_price_levels[neg_price]
+            if symbol is not None and not self._any_order_matches_symbol(price_level.orders, symbol):
+                continue
+            price = -neg_price  # Convert back to positive price
+            buy_orders.append((price, price_level.total_quantity()))
             
-        # For sell orders, combine quantities at each price level
-        sell_tuples = []
-        for price, price_level in self.sell_price_levels.items():
-            sell_tuples.append((price, price_level.total_quantity()))
+        sell_orders = []
+        for price in self.sell_price_levels:
+            price_level = self.sell_price_levels[price]
+            if symbol is not None and not self._any_order_matches_symbol(price_level.orders, symbol):
+                continue
+            sell_orders.append((price, price_level.total_quantity()))
             
-        return (buy_tuples, sell_tuples)
+        return buy_orders, sell_orders
+        
+    def _any_order_matches_symbol(self, orders, symbol):
+        """Check if any order in the list matches the given symbol."""
+        return any(order.symbol == symbol for order in orders if order.symbol is not None)
+        
+    def get_trades(self, symbol: Optional[str] = None, limit: int = 100) -> List[Trade]:
+        """
+        Get recent trades.
+        
+        Args:
+            symbol: Optional symbol to filter by
+            limit: Maximum number of trades to return
+            
+        Returns:
+            List of trades
+        """
+        if self.use_rust:
+            try:
+                # The Rust implementation doesn't have filter parameters on get_trades
+                rust_trades = self.rust_engine.get_trades()
+                # Convert the rust trades to our Trade class if needed
+                return rust_trades
+            except Exception as e:
+                logger.error(f"Error getting trades from Rust engine: {e}")
+                # Fall back to Python implementation
+                logger.warning("Falling back to Python implementation for get_trades")
+        
+        # Python implementation
+        if symbol is None:
+            # Return all trades up to the limit
+            return self.trades[-limit:]
+        else:
+            # Filter trades by symbol
+            filtered_trades = [t for t in self.trades if t.symbol == symbol]
+            return filtered_trades[-limit:]
     
     def get_price_statistics(self) -> Dict[str, Any]:
         """
@@ -781,10 +885,6 @@ class MatchingEngine:
     def get_order(self, order_id: int) -> Optional[Order]:
         """Get an order by its ID."""
         return self.orders_by_id.get(order_id)
-    
-    def get_trades(self) -> List[Trade]:
-        """Get all trades that have occurred."""
-        return self.trades
     
     def recycle_trades(self, to_recycle: List[Trade]) -> None:
         """
