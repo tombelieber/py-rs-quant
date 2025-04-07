@@ -1,6 +1,21 @@
 # py-rs-quant
 
-High-performance order matching engine built with Python and Rust.
+High-Performance Order Matching Engine and Trading Simulator built with Python and Rust.
+
+## Project Overview
+
+**High-Performance Trading Engine – py-rs-quant | Trading Engine Performance Optimization Project**
+
+- Developed a high-performance order matching engine with dual Python/Rust implementations, demonstrating expertise in systems programming and algorithmic optimization.
+- Leveraged advanced data structures (SortedDict, BTreeMap) and custom memory optimization techniques to achieve 9.75x throughput improvement and 89.7% latency reduction.
+- Employed zero-copy operations, bit-level optimizations, and cache-friendly memory patterns to realize sub-microsecond processing times.
+- Built comprehensive benchmarking tools with data visualization using Matplotlib to perform data-driven performance analysis across various network conditions and order volumes.
+- Integrated PyO3 for cross-language bindings, ensuring seamless Python/Rust integration.
+- Applied network analysis techniques, including MTU optimization and throughput modeling.
+- Developed a CLI framework for benchmarking and simulation, incorporating performance engineering strategies such as memory pooling and cache-friendly layouts.
+- Demonstrated a balanced approach between theoretical knowledge and practical implementation by employing concepts like MTU packet optimization and price-time priority matching algorithms.
+
+**Key Technologies:** Python, Rust, PyO3, Data Structures (SortedDict, BTreeMap), Memory Optimization, Algorithmic Optimization, Matplotlib, CLI Development, Network Analysis, Performance Engineering
 
 ## Performance Highlights
 
