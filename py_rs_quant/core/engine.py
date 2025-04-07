@@ -1,11 +1,9 @@
 """
 Python implementation of the matching engine.
 """
-from enum import Enum, auto
+from enum import Enum
 import time
-from typing import Dict, List, Optional, Tuple, Union, Callable, Iterable, Any
-import heapq
-from collections import defaultdict
+from typing import Dict, List, Optional, Tuple, Callable, Any
 from sortedcontainers import SortedDict  # For efficient order book management
 import numpy as np
 from numba import jit

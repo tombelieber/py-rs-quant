@@ -122,7 +122,7 @@ class TradingService:
                 - List of (price, quantity) for asks
         """
         # In a real implementation, we would filter by symbol
-        return self.matching_engine.get_order_book_snapshot()
+        return self.matching_engine.get_order_book_snapshot(symbol)
     
     def get_trades(self) -> List[Trade]:
         """Get all trades."""
