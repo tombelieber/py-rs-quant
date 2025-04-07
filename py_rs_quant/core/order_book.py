@@ -17,6 +17,12 @@ class OrderBook:
     Handles adding and removing orders at price levels.
     """
     
+    __slots__ = (
+        'buy_price_levels', 'sell_price_levels', 'orders_by_id', 
+        'order_price_map', '_price_level_cache', '_cache_hits', 
+        '_cache_misses', '_max_cache_size', '_orders_to_remove'
+    )
+    
     def __init__(self):
         # Use SortedDict for more efficient order book operations
         # For buy orders (highest price first), we'll use negative price as the key
@@ -73,6 +79,14 @@ class OrderBook:
         
         return level
     
+    def _get_price_level_fast(self, price_dict: SortedDict, price: float) -> Optional[PriceLevel]:
+        """
+        Fast path for getting price level without creating new ones.
+        Inlined version of _get_or_create_price_level for performance.
+        """
+        # Direct dictionary lookup without caching overhead
+        return price_dict.get(price)
+    
     def add_order(self, order: Order) -> None:
         """Add an order to the book."""
         self.orders_by_id[order.id] = order
@@ -86,6 +100,52 @@ class OrderBook:
             price_level = self._get_or_create_price_level(self.sell_price_levels, order.price)
             price_level.add_order(order)
             self.order_price_map[order.id] = order.price
+    
+    def add_order_fast(self, order: Order) -> None:
+        """Fast path for adding an order with minimal overhead."""
+        # Add to lookup maps
+        self.orders_by_id[order.id] = order
+        
+        if order.side == OrderSide.BUY:
+            neg_price = -order.price
+            price_dict = self.buy_price_levels
+            
+            # Try direct dictionary lookup first
+            if neg_price in price_dict:
+                price_level = price_dict[neg_price]
+            else:
+                # Create new price level if needed
+                price_level = PriceLevel(neg_price)
+                price_dict[neg_price] = price_level
+                
+                # Add to cache only if we have space (avoiding conditionals)
+                cache_key = (id(price_dict), neg_price)
+                if len(self._price_level_cache) < self._max_cache_size:
+                    self._price_level_cache[cache_key] = price_level
+            
+            # Add to price level and price map
+            price_level.add_order(order)
+            self.order_price_map[order.id] = neg_price
+        else:
+            price = order.price
+            price_dict = self.sell_price_levels
+            
+            # Try direct dictionary lookup first
+            if price in price_dict:
+                price_level = price_dict[price]
+            else:
+                # Create new price level if needed
+                price_level = PriceLevel(price)
+                price_dict[price] = price_level
+                
+                # Add to cache only if we have space
+                cache_key = (id(price_dict), price)
+                if len(self._price_level_cache) < self._max_cache_size:
+                    self._price_level_cache[cache_key] = price_level
+            
+            # Add to price level and price map
+            price_level.add_order(order)
+            self.order_price_map[order.id] = price
     
     def remove_order(self, order_id: int) -> Optional[Order]:
         """
@@ -136,6 +196,63 @@ class OrderBook:
                 return order
                 
         return None
+    
+    def remove_order_fast(self, order_id: int) -> Optional[Order]:
+        """
+        Fast path for removing an order with minimal overhead.
+        
+        Args:
+            order_id: The ID of the order to remove
+            
+        Returns:
+            The removed order or None if not found
+        """
+        # Fast fail if order doesn't exist
+        if order_id not in self.orders_by_id:
+            return None
+            
+        order = self.orders_by_id[order_id]
+        price = self.order_price_map.get(order_id)
+        
+        if price is None:
+            return None
+            
+        # Select the right price book based on order side
+        if order.side == OrderSide.BUY:
+            price_dict = self.buy_price_levels
+            cache_key = (id(price_dict), price)
+        else:
+            price_dict = self.sell_price_levels
+            cache_key = (id(price_dict), price)
+        
+        # Get price level directly from dictionary
+        price_level = price_dict.get(price)
+        if not price_level:
+            return None
+            
+        # Try to remove order from price level
+        removed = False
+        for i, o in enumerate(price_level.orders):
+            if o.id == order_id:
+                price_level.orders.pop(i)
+                price_level.is_dirty = True  # Flag cache as dirty
+                removed = True
+                break
+                
+        if not removed:
+            return None
+            
+        # Clean up empty price levels
+        if not price_level.orders:
+            del price_dict[price]
+            if cache_key in self._price_level_cache:
+                del self._price_level_cache[cache_key]
+                
+        # Remove from lookup dictionaries
+        del self.order_price_map[order_id]
+        del self.orders_by_id[order_id]
+        
+        return order
     
     def get_best_bid(self) -> Optional[float]:
         """Get the best bid price."""
@@ -209,10 +326,13 @@ class OrderBook:
         
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get statistics about cache performance."""
+        total_lookups = self._cache_hits + self._cache_misses
+        hit_ratio = self._cache_hits / total_lookups if total_lookups > 0 else 0.0
+        
         return {
             "cache_hits": self._cache_hits,
             "cache_misses": self._cache_misses,
-            "hit_ratio": self._cache_hits / (self._cache_hits + self._cache_misses) if (self._cache_hits + self._cache_misses) > 0 else 0.0,
+            "hit_ratio": hit_ratio,
             "cache_size": len(self._price_level_cache),
             "max_cache_size": self._max_cache_size
         } 
