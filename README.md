@@ -371,11 +371,34 @@ Both implementations leverage these common optimization techniques:
 
 ### Benchmark Results
 
-As shown in the benchmark section, the Rust implementation achieves approximately 1.5-2x performance improvement over the optimized Python version:
+Based on our most recent benchmarks, the Rust implementation significantly outperforms the optimized Python version:
 
-- **Python**: ~314,500 orders/sec, ~0.003ms average latency
-- **Rust**: ~496,600 orders/sec, ~0.002ms average latency
-- **Improvement**: 1.61x throughput, 37.78% latency reduction
+- **Python**: ~515,345 orders/sec, ~2.0µs average per-order processing latency
+- **Rust**: ~1,922,000 orders/sec, ~1.0µs average per-order processing latency
+- **Improvement**: 4.12x throughput, 75.74% latency reduction
+
+For larger workloads (100,000 orders), the performance advantage remains consistent:
+
+| Metric | Python | Rust | Improvement |
+|--------|--------|------|-------------|
+| Orders/sec | 515,345 | 1,922,000 | 3.73x |
+| Per-order processing latency (avg) | 2.0µs | 1.0µs | 50% reduction |
+| Per-order processing latency (p99) | 3.0µs | 1.0µs | 66.7% reduction |
+| Trades/sec | 515 | 6,880 | 13.3x |
+
+> **Note**: Latency here represents the time taken to process a single order through the matching engine (not including network or I/O latency). This is calculated by measuring the total time to process a batch of orders divided by the number of orders.
+
+You can visualize benchmark results by using the included plotting tool:
+
+```bash
+# Run a benchmark and save results to JSON
+trading-sim benchmark --iterations 5 --orders 100000 --output benchmark_results.json
+
+# Generate performance comparison charts
+python plot_benchmark.py benchmark_results.json
+```
+
+This will create visualization charts in the `benchmark_charts` directory.
 
 ## License
 

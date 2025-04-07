@@ -8,8 +8,10 @@ import logging
 import time
 from pathlib import Path
 from typing import Dict
+import sys
+import os
 
-from py_rs_quant.core.engine import MatchingEngine, OrderSide
+from py_rs_quant.core import MatchingEngine, OrderSide
 from py_rs_quant.risk.manager import RiskManager
 from py_rs_quant.simulation.simulator import MarketSimulator, SimulationMode
 from py_rs_quant.analytics.analyzer import PerformanceAnalyzer
@@ -57,6 +59,10 @@ def parse_args():
                               help="Number of orders per iteration")
     bench_parser.add_argument("--output", type=str, default=None,
                               help="Output file for benchmark results (JSON)")
+    bench_parser.add_argument("--no-plot", action="store_true",
+                              help="Disable automatic chart plotting")
+    bench_parser.add_argument("--chart-dir", type=str, default="benchmark_charts",
+                              help="Directory to save benchmark charts")
     
     # API command
     api_parser = subparsers.add_parser("api", help="Start the REST API server")
@@ -215,6 +221,12 @@ async def run_benchmark(args):
     """Run a performance benchmark comparing Python and Rust implementations."""
     logger.info("Starting performance benchmark")
     
+    # Determine output file for results
+    output_file = args.output
+    if not output_file:
+        timestamp = int(time.time())
+        output_file = f"benchmark_results_{timestamp}.json"
+    
     benchmark_results = {
         "python": [],
         "rust": [],
@@ -344,9 +356,9 @@ async def run_benchmark(args):
         logger.info(f"  {engine_type.upper()} results:")
         logger.info(f"    Average orders/sec: {avg_orders_per_second:.2f}")
         logger.info(f"    Average trades/sec: {avg_trades_per_second:.2f}")
-        logger.info(f"    Latency (ms) - min: {min_latency:.3f}, max: {max_latency:.3f}, avg: {avg_latency:.3f}")
-        logger.info(f"    Latency (ms) - median: {median_latency:.3f}, p99: {p99_latency:.3f}")
-        logger.info(f"    Total latency sum (ms): {sum_latency:.3f}")
+        logger.info(f"    Latency (µs) - min: {min_latency * 1000:.1f}, max: {max_latency * 1000:.1f}, avg: {avg_latency * 1000:.1f}")
+        logger.info(f"    Latency (µs) - median: {median_latency * 1000:.1f}, p99: {p99_latency * 1000:.1f}")
+        logger.info(f"    Total latency sum (µs): {sum_latency * 1000:.1f}")
         logger.info(f"    Overall throughput (ops/sec): {throughput:.2f}")
         
         benchmark_results[engine_type] = iteration_results
@@ -390,15 +402,15 @@ async def run_benchmark(args):
         }
         
         logger.info("Benchmark comparison:")
-        logger.info(f"  Python mean latency: {python_stats['avg_latency']:.3f} ms")
-        logger.info(f"  Rust mean latency: {rust_stats['avg_latency']:.3f} ms")
+        logger.info(f"  Python mean latency: {python_stats['avg_latency'] * 1000:.1f} µs")
+        logger.info(f"  Rust mean latency: {rust_stats['avg_latency'] * 1000:.1f} µs")
         logger.info(f"  Improvement factor: {latency_improvement:.2f}x")
         logger.info(f"  Improvement percent: {latency_percent:.2f}%")
         logger.info("Detailed comparison:")
-        logger.info(f"  Min latency: Python {python_stats['min_latency']:.3f} ms vs Rust {rust_stats['min_latency']:.3f} ms")
-        logger.info(f"  Max latency: Python {python_stats['max_latency']:.3f} ms vs Rust {rust_stats['max_latency']:.3f} ms")
-        logger.info(f"  Median latency: Python {python_stats['median_latency']:.3f} ms vs Rust {rust_stats['median_latency']:.3f} ms")
-        logger.info(f"  p99 latency: Python {python_stats['p99_latency']:.3f} ms vs Rust {rust_stats['p99_latency']:.3f} ms")
+        logger.info(f"  Min latency: Python {python_stats['min_latency'] * 1000:.1f} µs vs Rust {rust_stats['min_latency'] * 1000:.1f} µs")
+        logger.info(f"  Max latency: Python {python_stats['max_latency'] * 1000:.1f} µs vs Rust {rust_stats['max_latency'] * 1000:.1f} µs")
+        logger.info(f"  Median latency: Python {python_stats['median_latency'] * 1000:.1f} µs vs Rust {rust_stats['median_latency'] * 1000:.1f} µs")
+        logger.info(f"  p99 latency: Python {python_stats['p99_latency'] * 1000:.1f} µs vs Rust {rust_stats['p99_latency'] * 1000:.1f} µs")
         logger.info(f"  Throughput: Python {python_stats['throughput']:.2f} ops/s vs Rust {rust_stats['throughput']:.2f} ops/s")
     else:
         # Only Python results available
@@ -413,22 +425,63 @@ async def run_benchmark(args):
         }
         
         logger.info("Benchmark results:")
-        logger.info(f"  Python mean latency: {python_stats['avg_latency']:.3f} ms")
-        logger.info(f"  Min latency: Python {python_stats['min_latency']:.3f} ms")
-        logger.info(f"  Max latency: Python {python_stats['max_latency']:.3f} ms")
-        logger.info(f"  Median latency: Python {python_stats['median_latency']:.3f} ms")
-        logger.info(f"  p99 latency: Python {python_stats['p99_latency']:.3f} ms")
+        logger.info(f"  Python mean latency: {python_stats['avg_latency'] * 1000:.1f} µs")
+        logger.info(f"  Min latency: Python {python_stats['min_latency'] * 1000:.1f} µs")
+        logger.info(f"  Max latency: Python {python_stats['max_latency'] * 1000:.1f} µs")
+        logger.info(f"  Median latency: Python {python_stats['median_latency'] * 1000:.1f} µs")
+        logger.info(f"  p99 latency: Python {python_stats['p99_latency'] * 1000:.1f} µs")
         logger.info(f"  Throughput: Python {python_stats['throughput']:.2f} ops/s")
     
-    # Save results to file if requested
-    if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(output_path, "w") as f:
-            json.dump(benchmark_results, f, indent=2)
-        
-        logger.info(f"Benchmark results saved to {args.output}")
+    # Save results to file
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_path, "w") as f:
+        json.dump(benchmark_results, f, indent=2)
+    
+    logger.info(f"Benchmark results saved to {output_file}")
+    
+    # Automatically plot the benchmark results
+    if not args.no_plot:
+        try:
+            import matplotlib
+            # Use non-interactive backend if not in an interactive environment
+            if not sys.stdout.isatty():
+                matplotlib.use('Agg')
+            
+            # Import plot_benchmark functions
+            import importlib.util
+            
+            # Check if plot_benchmark.py exists in the current directory
+            plot_script_path = Path.cwd() / "plot_benchmark.py"
+            if plot_script_path.exists():
+                # Load the script as a module
+                spec = importlib.util.spec_from_file_location("plot_benchmark", plot_script_path)
+                plot_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(plot_module)
+                
+                # Create output directory
+                chart_dir = Path(args.chart_dir)
+                chart_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Generate charts
+                logger.info(f"Generating benchmark charts in {args.chart_dir}...")
+                throughput_chart = plot_module.plot_throughput_comparison(benchmark_results, args.chart_dir)
+                latency_chart = plot_module.plot_latency_comparison(benchmark_results, args.chart_dir)
+                
+                logger.info("Charts generated successfully:")
+                logger.info(f"  Throughput chart: {throughput_chart}")
+                logger.info(f"  Latency chart: {latency_chart}")
+            else:
+                logger.warning("plot_benchmark.py not found. Charts not generated.")
+                logger.info("To generate charts manually, run: python plot_benchmark.py " + output_file)
+        except ImportError as e:
+            logger.warning(f"Could not import plotting libraries: {str(e)}")
+            logger.info("Make sure matplotlib and numpy are installed to generate charts")
+            logger.info("To generate charts manually, run: python plot_benchmark.py " + output_file)
+        except Exception as e:
+            logger.warning(f"Error generating charts: {str(e)}")
+            logger.info("To generate charts manually, run: python plot_benchmark.py " + output_file)
     
     return 0
 
