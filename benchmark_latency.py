@@ -35,7 +35,7 @@ def measure_latency(operation, iterations=10000, warmup=1000):
 def main():
     """Run latency benchmarks."""
     print("Initializing engine...")
-    engine = MatchingEngine(use_fast_path=True)
+    engine = MatchingEngine()
     
     # Define operations to benchmark
     operations = {
@@ -46,18 +46,7 @@ def main():
     }
     
     # Run benchmarks
-    print("\nRunning latency benchmarks (fast path):")
-    print("-" * 80)
-    print(f"{'Operation':<20} {'Mean (ms)':<15} {'Median (ms)':<15} {'p99 (ms)':<15} {'Min (ms)':<15} {'Max (ms)':<15}")
-    print("-" * 80)
-    
-    for name, operation in operations.items():
-        result = measure_latency(operation)
-        print(f"{name:<20} {result['mean']:<15.6f} {result['median']:<15.6f} {result['p99']:<15.6f} {result['min']:<15.6f} {result['max']:<15.6f}")
-    
-    # Reinitialize with standard path
-    print("\nRunning latency benchmarks (standard path):")
-    engine = MatchingEngine(use_fast_path=False)
+    print("\nRunning latency benchmarks (optimized):")
     print("-" * 80)
     print(f"{'Operation':<20} {'Mean (ms)':<15} {'Median (ms)':<15} {'p99 (ms)':<15} {'Min (ms)':<15} {'Max (ms)':<15}")
     print("-" * 80)

@@ -9,15 +9,24 @@ from collections import OrderedDict
 # Try to import numba for JIT compilation
 try:
     from numba import njit, jit
+    import numpy as np
     NUMBA_AVAILABLE = True
 except ImportError:
     # Fallback implementation if numba is not available
     NUMBA_AVAILABLE = False
     # Create dummy decorators that do nothing
-    def njit(func):
+    def njit(func, **kwargs):
         return func
-    def jit(func):
+    def jit(func, **kwargs):
         return func
+    # Dummy NumPy replacement
+    import array
+    class DummyNumPy:
+        def sum(self, a):
+            return sum(a)
+        def zeros(self, shape, dtype=None):
+            return [[0.0] * shape[1] for _ in range(shape[0])]
+    np = DummyNumPy()
 
 logger = logging.getLogger(__name__)
 

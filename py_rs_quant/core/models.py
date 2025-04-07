@@ -2,7 +2,6 @@
 Data models for the matching engine.
 """
 import time
-import array
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -54,25 +53,6 @@ class QuantityArray:
         self.capacity = new_capacity
 
 
-class Trade:
-    """
-    Represents a trade between two orders.
-    """
-    __slots__ = ['trade_id', 'buy_order_id', 'sell_order_id', 'price', 'quantity', 'timestamp', 'symbol']
-    
-    def __init__(self, trade_id: int, buy_order_id: int, sell_order_id: int, price: float, quantity: float, symbol: Optional[str] = None, timestamp: Optional[int] = None) -> None:
-        self.trade_id = trade_id
-        self.buy_order_id = buy_order_id
-        self.sell_order_id = sell_order_id
-        self.price = price
-        self.quantity = quantity
-        self.timestamp = timestamp or int(time.time() * 1000)
-        self.symbol = symbol
-        
-    def __repr__(self) -> str:
-        return f"Trade(id={self.trade_id}, buy_id={self.buy_order_id}, sell_id={self.sell_order_id}, price={self.price}, qty={self.quantity})"
-
-
 class Order:
     """Order model representing a buy or sell order in the order book."""
     # Ordered for cache line efficiency: frequently accessed fields first
@@ -114,50 +94,92 @@ class Order:
                 f"remaining={self.remaining_quantity}, status={self.status.name})")
 
 
-class PriceLevel:
-    """Price level for aggregating orders at the same price."""
+class Trade:
+    """Trade model representing an executed trade between two orders."""
+    # Ordered for cache line efficiency
+    __slots__ = [
+        'trade_id', 'buy_order_id', 'sell_order_id',  # IDs are accessed most
+        'price', 'quantity',                          # Trade details
+        'timestamp', 'symbol'                         # Metadata
+    ]
     
-    def __init__(self, price: float, use_arrays: bool = False):
-        """Initialize with the price for this level."""
-        self.price = price
-        self.orders = []
-        self.total_qty_cache = 0.0  # Cache for total quantity
-        self.is_dirty = True  # Flag to indicate if cache needs update
+    def __init__(self, 
+                 trade_id: int, 
+                 buy_order_id: int, 
+                 sell_order_id: int, 
+                 price: float, 
+                 quantity: float,
+                 symbol: Optional[str] = None,
+                 timestamp: int = 0):
+        """Initialize a trade."""
+        # Frequently accessed fields
+        self.trade_id = trade_id
+        self.buy_order_id = buy_order_id
+        self.sell_order_id = sell_order_id
         
-        # Optional array-based storage for ultra-performance
-        self._using_arrays = use_arrays
-        self._array_quantities = QuantityArray(64) if use_arrays else None
+        # Trade details
+        self.price = price
+        self.quantity = quantity
+        
+        # Metadata
+        self.timestamp = timestamp
+        self.symbol = symbol
+        
+    def __repr__(self) -> str:
+        """String representation for debugging."""
+        return (f"Trade(id={self.trade_id}, buy_id={self.buy_order_id}, "
+                f"sell_id={self.sell_order_id}, price={self.price}, qty={self.quantity})")
+
+
+class PriceLevel:
+    """Price level model representing all orders at a specific price."""
+    # Optimize field order for cache efficiency
+    __slots__ = [
+        'price', 'orders', 'total_qty_cache', 'is_dirty'
+    ]
     
-    def add_order(self, order):
+    def __init__(self, price: float):
+        """Initialize a price level."""
+        self.price = price
+        self.orders: List[Order] = []
+        self.total_qty_cache: float = 0.0
+        self.is_dirty: bool = False
+        
+    def add_order(self, order: Order) -> None:
         """Add an order to this price level."""
         self.orders.append(order)
         self.total_qty_cache += order.remaining_quantity
         
-    def remove_order(self, order_id):
-        """Remove an order from this price level by ID."""
+    def remove_order(self, order_id: int) -> bool:
+        """Remove an order from this price level."""
         for i, order in enumerate(self.orders):
             if order.id == order_id:
-                self.orders.pop(i)
-                self.is_dirty = True  # Invalidate cache
-                return order
-        return None
+                removed = self.orders.pop(i)
+                self.is_dirty = True  # Mark for total quantity recalculation
+                return True
+        return False
     
-    def update_qty_cache(self):
-        """Update the cached total quantity if needed."""
+    def get_total_quantity(self) -> float:
+        """Get the total quantity of all orders at this price level."""
         if self.is_dirty:
+            # Recalculate the total quantity
             self.total_qty_cache = sum(order.remaining_quantity for order in self.orders)
             self.is_dirty = False
-    
-    def total_quantity(self):
-        """Get the total quantity at this price level."""
-        self.update_qty_cache()
         return self.total_qty_cache
     
+    def __len__(self) -> int:
+        """Number of orders at this price level."""
+        return len(self.orders)
+    
+    def __bool__(self) -> bool:
+        """Check if there are any orders at this price level."""
+        return bool(self.orders)
+    
     def __repr__(self) -> str:
-        return f"PriceLevel(price={self.price}, orders={len(self.orders)}, qty={self.total_quantity()})"
+        """String representation for debugging."""
+        return f"PriceLevel(price={self.price}, orders={len(self.orders)}, qty={self.get_total_quantity()})"
 
 
-# Cache statistics class
 class CacheStats:
     """Statistics for cache performance."""
     __slots__ = ['hits', 'misses', 'total']

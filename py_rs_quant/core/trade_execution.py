@@ -1,7 +1,6 @@
 """
 Trade execution logic for the matching engine.
 """
-import time
 from typing import List, Optional, Callable
 import logging
 
