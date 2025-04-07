@@ -241,9 +241,6 @@ pub struct OrderBook {
     // Trades with pre-allocated capacity
     trades: Vec<Trade>,
 
-    // Reusable vectors for batch operations
-    removed_price_levels: Vec<i64>,
-
     // Statistics
     stats: OrderBookStats,
 }
@@ -263,7 +260,6 @@ impl OrderBook {
             next_order_id: 1,
             next_trade_id: 1,
             trades: Vec::with_capacity(1000),
-            removed_price_levels: Vec::with_capacity(16),
             stats: OrderBookStats::default(),
         }
     }
@@ -479,7 +475,7 @@ impl OrderBook {
                     // Perform the matching - extract orders to be processed from the level
                     if let Some(level) = self.sell_price_levels.get_mut(&price_bits) {
                         // Extract orders to process
-                        let mut orders_to_process = std::mem::take(&mut level.orders);
+                        let orders_to_process = std::mem::take(&mut level.orders);
                         let price = level.price;
 
                         // Match orders
@@ -581,7 +577,7 @@ impl OrderBook {
                     // Perform the matching - extract orders to be processed from the level
                     if let Some(level) = self.buy_price_levels.get_mut(&price_bits) {
                         // Extract orders to process
-                        let mut orders_to_process = std::mem::take(&mut level.orders);
+                        let orders_to_process = std::mem::take(&mut level.orders);
                         let price = level.price;
 
                         // Match orders
@@ -702,7 +698,7 @@ impl OrderBook {
                     // Perform the matching - extract orders to be processed from the level
                     if let Some(level) = self.sell_price_levels.get_mut(&price_bits) {
                         // Extract orders to process
-                        let mut orders_to_process = std::mem::take(&mut level.orders);
+                        let orders_to_process = std::mem::take(&mut level.orders);
                         let price = level.price;
 
                         // Match orders
@@ -807,7 +803,7 @@ impl OrderBook {
                     // Perform the matching - extract orders to be processed from the level
                     if let Some(level) = self.buy_price_levels.get_mut(&price_bits) {
                         // Extract orders to process
-                        let mut orders_to_process = std::mem::take(&mut level.orders);
+                        let orders_to_process = std::mem::take(&mut level.orders);
                         let price = level.price;
 
                         // Match orders
@@ -942,7 +938,7 @@ impl OrderBook {
         (buy_snapshot, sell_snapshot)
     }
 
-    pub fn get_trades(&self, limit: Option<usize>) -> PyResult<Vec<PyTrade>> {
+    fn get_trades(&self, limit: Option<usize>) -> PyResult<Vec<PyTrade>> {
         let trades = if let Some(l) = limit {
             // Take the last 'l' trades
             let start_index = self.trades.len().saturating_sub(l);
@@ -982,7 +978,6 @@ impl Clone for OrderBook {
             next_order_id: self.next_order_id,
             next_trade_id: self.next_trade_id,
             trades: self.trades.clone(),
-            removed_price_levels: Vec::with_capacity(16),
             stats: self.stats.clone(),
         }
     }

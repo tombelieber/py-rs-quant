@@ -5,10 +5,9 @@ import random
 import time
 import asyncio
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union, Callable
+from typing import Dict, List, Optional, Callable
 import logging
 
-import numpy as np
 
 from py_rs_quant.core.engine import MatchingEngine, OrderSide, OrderType, Order, Trade
 from py_rs_quant.risk.manager import RiskManager, RiskCheckResult

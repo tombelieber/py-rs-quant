@@ -3,7 +3,6 @@ Dependencies for engines used in the API.
 """
 from typing import Dict
 
-from fastapi import Depends
 
 from py_rs_quant.core.engine import MatchingEngine, Order
 from py_rs_quant.risk.manager import RiskManager

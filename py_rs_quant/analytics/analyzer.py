@@ -1,20 +1,15 @@
 """
 Analytics module for processing trade data and generating performance statistics.
 """
-import time
-from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union, Any
-import statistics
 import logging
+import statistics
+import time
 from collections import defaultdict
-from datetime import datetime, timedelta
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
 
-from py_rs_quant.core.engine import Trade, Order, OrderSide, OrderType, OrderStatus
+from py_rs_quant.core.engine import Order, OrderStatus, Trade
 
 logger = logging.getLogger(__name__)
 

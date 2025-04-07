@@ -7,12 +7,12 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict
 
-from py_rs_quant.core.engine import MatchingEngine, OrderSide, OrderType
+from py_rs_quant.core.engine import MatchingEngine, OrderSide
 from py_rs_quant.risk.manager import RiskManager
 from py_rs_quant.simulation.simulator import MarketSimulator, SimulationMode
-from py_rs_quant.analytics.analyzer import PerformanceAnalyzer, TimeFrame
+from py_rs_quant.analytics.analyzer import PerformanceAnalyzer
 
 
 # Set up logging
