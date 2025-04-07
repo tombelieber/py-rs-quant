@@ -217,144 +217,208 @@ async def run_benchmark(args):
     
     benchmark_results = {
         "python": [],
+        "rust": [],
         "comparison": {}
     }
     
     # Create the analyzers for tracking performance
     analyzer = PerformanceAnalyzer()
     
-    # Only run the Python implementation as Rust is no longer supported
-    engine_type = "python"
+    # Check if Rust implementation is available
+    rust_available = False
+    try:
+        from py_rs_quant.core import RustMatchingEngine, is_rust_available
+        rust_available = is_rust_available()
+        if rust_available:
+            logger.info("Rust matching engine module is available")
+        else:
+            logger.warning("Rust matching engine module found but not available")
+    except ImportError:
+        logger.warning("Rust matching engine module is not importable")
     
-    logger.info(f"Benchmarking {engine_type.upper()} implementation")
+    # Run benchmarks for both implementations
+    for engine_type in ["python", "rust"]:
+        # Skip Rust if not available
+        if engine_type == "rust" and not rust_available:
+            logger.warning("Skipping Rust benchmarks as the module is not available")
+            continue
+        
+        logger.info(f"Benchmarking {engine_type.upper()} implementation")
+        
+        # Create the appropriate matching engine
+        if engine_type == "rust":
+            matching_engine = RustMatchingEngine()
+        else:
+            matching_engine = MatchingEngine()  # Python implementation
+        
+        # Run iterations
+        iteration_results = []
+        latencies = []
+        
+        for i in range(args.iterations):
+            logger.info(f"  Running iteration {i+1}/{args.iterations}")
+            
+            # Reset the engine
+            if engine_type == "rust":
+                matching_engine = RustMatchingEngine()
+            else:
+                matching_engine = MatchingEngine()
+            
+            # Generate and process orders
+            start_time = time.time()
+            order_count = 0
+            
+            # Track the best prices for limit orders
+            bid_price = 50000.0
+            ask_price = 50100.0
+            
+            # Submit orders
+            for j in range(args.orders):
+                # Alternate between buy and sell
+                is_buy = j % 2 == 0
+                side = OrderSide.BUY if is_buy else OrderSide.SELL
+                
+                # Use limit orders
+                price = bid_price if is_buy else ask_price
+                
+                # Randomize prices slightly to prevent perfect matching
+                price_offset = (j % 10) * 0.1
+                price = price + price_offset if is_buy else price - price_offset
+                
+                # Submit the order
+                order_id = matching_engine.add_limit_order(side, price, 1.0, int(time.time() * 1000))
+                order_count += 1
+                
+                # Periodically update prices
+                if j % 100 == 0:
+                    bid_price = 50000.0 + (j / args.orders) * 100.0
+                    ask_price = bid_price + 100.0
+            
+            end_time = time.time()
+            elapsed = end_time - start_time
+            
+            # Get trades
+            trades = matching_engine.get_trades()
+            
+            # Calculate per-order latency in ms
+            per_order_latency = (elapsed * 1000) / order_count
+            latencies.append(per_order_latency)
+            
+            # Record iteration results
+            iteration_result = {
+                "iteration": i + 1,
+                "orders_processed": order_count,
+                "trades_executed": len(trades),
+                "elapsed_time": elapsed,
+                "orders_per_second": order_count / elapsed,
+                "trades_per_second": len(trades) / elapsed if elapsed > 0 else 0,
+                "latency_ms": per_order_latency
+            }
+            
+            iteration_results.append(iteration_result)
+            
+            # Add latency measurement
+            analyzer.add_latency_measurement(
+                f"{engine_type}_matching", 
+                per_order_latency
+            )
+            
+            # Allow some time between iterations
+            await asyncio.sleep(0.1)
+        
+        # Calculate averages
+        avg_orders_per_second = sum(r["orders_per_second"] for r in iteration_results) / len(iteration_results)
+        avg_trades_per_second = sum(r["trades_per_second"] for r in iteration_results) / len(iteration_results)
+        
+        # Calculate latency statistics
+        latencies.sort()
+        min_latency = min(latencies)
+        max_latency = max(latencies)
+        avg_latency = sum(latencies) / len(latencies)
+        sum_latency = sum(latencies)
+        median_latency = latencies[len(latencies) // 2]
+        p99_idx = int(len(latencies) * 0.99)
+        p99_latency = latencies[p99_idx]
+        throughput = args.orders * args.iterations / sum(r["elapsed_time"] for r in iteration_results)
+        
+        logger.info(f"  {engine_type.upper()} results:")
+        logger.info(f"    Average orders/sec: {avg_orders_per_second:.2f}")
+        logger.info(f"    Average trades/sec: {avg_trades_per_second:.2f}")
+        logger.info(f"    Latency (ms) - min: {min_latency:.3f}, max: {max_latency:.3f}, avg: {avg_latency:.3f}")
+        logger.info(f"    Latency (ms) - median: {median_latency:.3f}, p99: {p99_latency:.3f}")
+        logger.info(f"    Total latency sum (ms): {sum_latency:.3f}")
+        logger.info(f"    Overall throughput (ops/sec): {throughput:.2f}")
+        
+        benchmark_results[engine_type] = iteration_results
+        # Add detailed stats to results
+        benchmark_results[f"{engine_type}_stats"] = {
+            "min_latency": min_latency,
+            "max_latency": max_latency,
+            "avg_latency": avg_latency,
+            "sum_latency": sum_latency,
+            "median_latency": median_latency,
+            "p99_latency": p99_latency,
+            "throughput": throughput
+        }
     
-    # Create matching engine
-    matching_engine = MatchingEngine()
-    
-    # Run iterations
-    iteration_results = []
-    latencies = []
-    
-    for i in range(args.iterations):
-        logger.info(f"  Running iteration {i+1}/{args.iterations}")
+    # Update comparison if both implementations were run
+    if "rust_stats" in benchmark_results:
+        python_stats = benchmark_results["python_stats"]
+        rust_stats = benchmark_results["rust_stats"]
         
-        # Reset the engine
-        matching_engine = MatchingEngine()
+        # Calculate improvement factors
+        latency_improvement = python_stats["avg_latency"] / rust_stats["avg_latency"] if rust_stats["avg_latency"] > 0 else 0
+        throughput_improvement = rust_stats["throughput"] / python_stats["throughput"] if python_stats["throughput"] > 0 else 0
+        latency_percent = (1 - rust_stats["avg_latency"] / python_stats["avg_latency"]) * 100 if python_stats["avg_latency"] > 0 else 0
         
-        # Generate and process orders
-        start_time = time.time()
-        order_count = 0
-        
-        # Track the best prices for limit orders
-        bid_price = 50000.0
-        ask_price = 50100.0
-        
-        # Submit orders
-        for j in range(args.orders):
-            # Alternate between buy and sell
-            is_buy = j % 2 == 0
-            side = OrderSide.BUY if is_buy else OrderSide.SELL
-            
-            # Use limit orders
-            price = bid_price if is_buy else ask_price
-            
-            # Randomize prices slightly to prevent perfect matching
-            price_offset = (j % 10) * 0.1
-            price = price + price_offset if is_buy else price - price_offset
-            
-            # Submit the order
-            order_id = matching_engine.add_limit_order(side, price, 1.0, int(time.time() * 1000))
-            order_count += 1
-            
-            # Periodically update prices
-            if j % 100 == 0:
-                bid_price = 50000.0 + (j / args.orders) * 100.0
-                ask_price = bid_price + 100.0
-        
-        end_time = time.time()
-        elapsed = end_time - start_time
-        
-        # Get trades
-        trades = matching_engine.get_trades()
-        
-        # Calculate per-order latency in ms
-        per_order_latency = (elapsed * 1000) / order_count
-        latencies.append(per_order_latency)
-        
-        # Record iteration results
-        iteration_result = {
-            "iteration": i + 1,
-            "orders_processed": order_count,
-            "trades_executed": len(trades),
-            "elapsed_time": elapsed,
-            "orders_per_second": order_count / elapsed,
-            "trades_per_second": len(trades) / elapsed if elapsed > 0 else 0,
-            "latency_ms": per_order_latency
+        benchmark_results["comparison"] = {
+            "python_mean_latency": python_stats["avg_latency"],
+            "rust_mean_latency": rust_stats["avg_latency"],
+            "latency_improvement_factor": latency_improvement,
+            "latency_improvement_percent": latency_percent,
+            "throughput_improvement_factor": throughput_improvement,
+            "python_min": python_stats["min_latency"],
+            "python_max": python_stats["max_latency"],
+            "python_median": python_stats["median_latency"],
+            "python_p99": python_stats["p99_latency"],
+            "python_throughput": python_stats["throughput"],
+            "rust_min": rust_stats["min_latency"],
+            "rust_max": rust_stats["max_latency"],
+            "rust_median": rust_stats["median_latency"],
+            "rust_p99": rust_stats["p99_latency"],
+            "rust_throughput": rust_stats["throughput"]
         }
         
-        iteration_results.append(iteration_result)
+        logger.info("Benchmark comparison:")
+        logger.info(f"  Python mean latency: {python_stats['avg_latency']:.3f} ms")
+        logger.info(f"  Rust mean latency: {rust_stats['avg_latency']:.3f} ms")
+        logger.info(f"  Improvement factor: {latency_improvement:.2f}x")
+        logger.info(f"  Improvement percent: {latency_percent:.2f}%")
+        logger.info("Detailed comparison:")
+        logger.info(f"  Min latency: Python {python_stats['min_latency']:.3f} ms vs Rust {rust_stats['min_latency']:.3f} ms")
+        logger.info(f"  Max latency: Python {python_stats['max_latency']:.3f} ms vs Rust {rust_stats['max_latency']:.3f} ms")
+        logger.info(f"  Median latency: Python {python_stats['median_latency']:.3f} ms vs Rust {rust_stats['median_latency']:.3f} ms")
+        logger.info(f"  p99 latency: Python {python_stats['p99_latency']:.3f} ms vs Rust {rust_stats['p99_latency']:.3f} ms")
+        logger.info(f"  Throughput: Python {python_stats['throughput']:.2f} ops/s vs Rust {rust_stats['throughput']:.2f} ops/s")
+    else:
+        # Only Python results available
+        python_stats = benchmark_results["python_stats"]
+        benchmark_results["comparison"] = {
+            "python_mean_latency": python_stats["avg_latency"],
+            "python_min": python_stats["min_latency"],
+            "python_max": python_stats["max_latency"],
+            "python_median": python_stats["median_latency"],
+            "python_p99": python_stats["p99_latency"],
+            "python_throughput": python_stats["throughput"]
+        }
         
-        # Add latency measurement
-        analyzer.add_latency_measurement(
-            f"{engine_type}_matching", 
-            per_order_latency
-        )
-        
-        # Allow some time between iterations
-        await asyncio.sleep(0.1)
-    
-    # Calculate averages
-    avg_orders_per_second = sum(r["orders_per_second"] for r in iteration_results) / len(iteration_results)
-    avg_trades_per_second = sum(r["trades_per_second"] for r in iteration_results) / len(iteration_results)
-    
-    # Calculate latency statistics
-    latencies.sort()
-    min_latency = min(latencies)
-    max_latency = max(latencies)
-    avg_latency = sum(latencies) / len(latencies)
-    sum_latency = sum(latencies)
-    median_latency = latencies[len(latencies) // 2]
-    p99_idx = int(len(latencies) * 0.99)
-    p99_latency = latencies[p99_idx]
-    throughput = args.orders * args.iterations / sum(r["elapsed_time"] for r in iteration_results)
-    
-    logger.info(f"  {engine_type.upper()} results:")
-    logger.info(f"    Average orders/sec: {avg_orders_per_second:.2f}")
-    logger.info(f"    Average trades/sec: {avg_trades_per_second:.2f}")
-    logger.info(f"    Latency (ms) - min: {min_latency:.3f}, max: {max_latency:.3f}, avg: {avg_latency:.3f}")
-    logger.info(f"    Latency (ms) - median: {median_latency:.3f}, p99: {p99_latency:.3f}")
-    logger.info(f"    Total latency sum (ms): {sum_latency:.3f}")
-    logger.info(f"    Overall throughput (ops/sec): {throughput:.2f}")
-    
-    benchmark_results[engine_type] = iteration_results
-    # Add detailed stats to results
-    benchmark_results[f"{engine_type}_stats"] = {
-        "min_latency": min_latency,
-        "max_latency": max_latency,
-        "avg_latency": avg_latency,
-        "sum_latency": sum_latency,
-        "median_latency": median_latency,
-        "p99_latency": p99_latency,
-        "throughput": throughput
-    }
-    
-    # Update comparison - don't compare with Rust anymore
-    benchmark_results["comparison"] = {
-        "python_mean_latency": benchmark_results["python_stats"]["avg_latency"],
-        "python_min": benchmark_results["python_stats"]["min_latency"],
-        "python_max": benchmark_results["python_stats"]["max_latency"],
-        "python_median": benchmark_results["python_stats"]["median_latency"],
-        "python_p99": benchmark_results["python_stats"]["p99_latency"],
-        "python_throughput": benchmark_results["python_stats"]["throughput"]
-    }
-    
-    logger.info("Benchmark results:")
-    logger.info(f"  Python mean latency: {benchmark_results['comparison']['python_mean_latency']:.3f} ms")
-    logger.info(f"  Min latency: Python {benchmark_results['comparison']['python_min']:.3f} ms")
-    logger.info(f"  Max latency: Python {benchmark_results['comparison']['python_max']:.3f} ms")
-    logger.info(f"  Median latency: Python {benchmark_results['comparison']['python_median']:.3f} ms")
-    logger.info(f"  p99 latency: Python {benchmark_results['comparison']['python_p99']:.3f} ms")
-    logger.info(f"  Throughput: Python {benchmark_results['comparison']['python_throughput']:.2f} ops/s")
+        logger.info("Benchmark results:")
+        logger.info(f"  Python mean latency: {python_stats['avg_latency']:.3f} ms")
+        logger.info(f"  Min latency: Python {python_stats['min_latency']:.3f} ms")
+        logger.info(f"  Max latency: Python {python_stats['max_latency']:.3f} ms")
+        logger.info(f"  Median latency: Python {python_stats['median_latency']:.3f} ms")
+        logger.info(f"  p99 latency: Python {python_stats['p99_latency']:.3f} ms")
+        logger.info(f"  Throughput: Python {python_stats['throughput']:.2f} ops/s")
     
     # Save results to file if requested
     if args.output:
