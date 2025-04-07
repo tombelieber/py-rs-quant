@@ -1,16 +1,43 @@
 """
 Price statistics calculation for the matching engine.
 """
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
+import time
 
 from py_rs_quant.core.utils import calculate_price_stats
+from py_rs_quant.core.order_book import OrderBook
 
 
 class PriceStatisticsCalculator:
     """
     Calculate price statistics from order book data.
     """
+    
+    def __init__(self, order_book: OrderBook):
+        """
+        Initialize the price statistics calculator.
+        
+        Args:
+            order_book: The order book to calculate statistics for
+        """
+        self.order_book = order_book
+    
+    def calculate_price_statistics(self) -> Dict[str, Any]:
+        """
+        Calculate price statistics from the current order book.
+        
+        Returns:
+            Dictionary of price statistics
+        """
+        # Get price levels from order book
+        buy_levels, sell_levels = self.order_book.get_order_book_snapshot()
+        
+        # Use the static method to calculate statistics
+        stats = self.calculate_from_price_levels(buy_levels, sell_levels)
+        stats["timestamp"] = int(time.time() * 1000)
+        
+        return stats
     
     @staticmethod
     def calculate_from_price_levels(buy_levels: List[Tuple[float, float]], sell_levels: List[Tuple[float, float]]) -> Dict[str, Any]:

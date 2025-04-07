@@ -8,7 +8,8 @@ a matching engine for order book simulations.
 __version__ = "0.1.0"
 
 # Core components
-from py_rs_quant.core.engine import MatchingEngine, OrderSide, OrderType, OrderStatus, Order, Trade
+from py_rs_quant.core import MatchingEngine, OrderSide, OrderType, OrderStatus, Order, Trade
+from py_rs_quant.core import OrderBook, TradeExecutor, Matcher, OrderProcessor, PriceStatisticsCalculator
 
 # For backward compatibility, expose these at the top level
 from py_rs_quant.simulation.simulator import MarketSimulator, SimulationMode

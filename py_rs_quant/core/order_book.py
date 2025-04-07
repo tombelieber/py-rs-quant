@@ -4,6 +4,7 @@ Order book implementation for the matching engine.
 from typing import Dict, List, Optional, Tuple, Any
 from sortedcontainers import SortedDict
 import logging
+import time
 
 from py_rs_quant.core.enums import OrderSide
 from py_rs_quant.core.models import Order, PriceLevel
@@ -310,6 +311,32 @@ class OrderBook:
             Tuple of (buy_orders, sell_orders) where each is a list of (price, quantity) tuples
         """
         return self.get_price_levels(OrderSide.BUY), self.get_price_levels(OrderSide.SELL)
+    
+    def get_snapshot(self) -> Dict[str, Any]:
+        """
+        Get a comprehensive snapshot of the order book in dictionary format.
+        
+        Returns:
+            Dictionary with buy and sell sides, each containing lists of price levels
+            with detailed information including price, quantity, and number of orders
+        """
+        buy_levels, sell_levels = self.get_order_book_snapshot()
+        
+        # Create a more detailed representation
+        return {
+            "timestamp": int(time.time() * 1000),
+            "buy_side": [
+                {"price": price, "quantity": quantity, "order_count": len(self.get_orders_at_price(OrderSide.BUY, price))}
+                for price, quantity in buy_levels
+            ],
+            "sell_side": [
+                {"price": price, "quantity": quantity, "order_count": len(self.get_orders_at_price(OrderSide.SELL, price))}
+                for price, quantity in sell_levels
+            ],
+            "spread": sell_levels[0][0] - buy_levels[0][0] if sell_levels and buy_levels else None,
+            "mid_price": (sell_levels[0][0] + buy_levels[0][0]) / 2 if sell_levels and buy_levels else None,
+            "total_orders": len(self.orders_by_id)
+        }
     
     def _any_order_matches_symbol(self, orders, symbol):
         """Check if any order in the list matches the given symbol."""

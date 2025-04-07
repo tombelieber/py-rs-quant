@@ -405,50 +405,55 @@ class PerformanceAnalyzer:
     
     def compare_python_vs_rust(self, latency_samples: int = 100) -> Dict[str, Any]:
         """
-        Compare Python vs Rust performance.
+        Get Python performance statistics.
+        This method is maintained for backward compatibility but no longer compares
+        Python vs Rust since the Rust implementation has been removed.
         
         Args:
             latency_samples: Number of latency samples to use
             
         Returns:
-            Dict of performance comparisons
+            Dict of Python performance statistics
         """
-        # Filter latency measurements for Python and Rust
+        # Filter latency measurements for Python
         python_latencies = [
             m["latency_ms"] for m in self.latency_measurements
             if m["operation"].startswith("python_")
         ]
         
-        rust_latencies = [
-            m["latency_ms"] for m in self.latency_measurements
-            if m["operation"].startswith("rust_")
-        ]
-        
         # Limit to the specified number of samples
         python_latencies = python_latencies[-latency_samples:] if python_latencies else []
-        rust_latencies = rust_latencies[-latency_samples:] if rust_latencies else []
         
-        if not python_latencies or not rust_latencies:
+        if not python_latencies:
             return {
                 "python_mean": 0.0,
-                "rust_mean": 0.0,
-                "improvement_factor": 0.0,
-                "improvement_percent": 0.0
+                "python_median": 0.0,
+                "python_min": 0.0,
+                "python_max": 0.0,
+                "python_p95": 0.0,
+                "python_p99": 0.0
             }
         
         # Calculate statistics
         python_mean = statistics.mean(python_latencies)
-        rust_mean = statistics.mean(rust_latencies)
+        python_median = statistics.median(python_latencies)
+        python_min = min(python_latencies)
+        python_max = max(python_latencies)
         
-        # Calculate improvement
-        improvement_factor = python_mean / rust_mean if rust_mean > 0 else 0.0
-        improvement_percent = (python_mean - rust_mean) / python_mean * 100 if python_mean > 0 else 0.0
+        # Calculate percentiles
+        python_latencies.sort()
+        p95_idx = int(len(python_latencies) * 0.95)
+        p99_idx = int(len(python_latencies) * 0.99)
+        python_p95 = python_latencies[p95_idx] if p95_idx < len(python_latencies) else python_max
+        python_p99 = python_latencies[p99_idx] if p99_idx < len(python_latencies) else python_max
         
         return {
             "python_mean": python_mean,
-            "rust_mean": rust_mean,
-            "improvement_factor": improvement_factor,
-            "improvement_percent": improvement_percent
+            "python_median": python_median,
+            "python_min": python_min,
+            "python_max": python_max,
+            "python_p95": python_p95,
+            "python_p99": python_p99
         }
     
     def generate_time_series(self,
@@ -559,7 +564,7 @@ class PerformanceAnalyzer:
         price_stats = self.calculate_price_statistics(symbol)
         order_book_metrics = self.calculate_order_book_metrics(symbol)
         latency_stats = self.calculate_latency_statistics()
-        rust_vs_python = self.compare_python_vs_rust()
+        python_stats = self.compare_python_vs_rust()
         
         # Calculate total orders and trades
         total_orders = len([
@@ -583,7 +588,7 @@ class PerformanceAnalyzer:
             "price_stats": price_stats,
             "order_book": order_book_metrics,
             "latency": latency_stats,
-            "optimization": rust_vs_python
+            "performance": python_stats  # Renamed from optimization
         }
     
     def export_metrics_to_dict(self, symbol: str) -> Dict[str, Dict[str, Any]]:

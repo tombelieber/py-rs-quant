@@ -277,7 +277,7 @@ class MarketSimulator:
                 # Call the order callback if registered
                 if self.on_order_callback:
                     order = Order(
-                        order_id=order_id,
+                        id=order_id,
                         side=side,
                         order_type=order_type,
                         price=price,
@@ -353,7 +353,7 @@ class MarketSimulator:
 async def run_simulation_example():
     """Run a simple example simulation."""
     # Create the matching engine and risk manager
-    matching_engine = MatchingEngine(use_rust=True)
+    matching_engine = MatchingEngine()
     risk_manager = RiskManager()
     
     # Set up risk limits
