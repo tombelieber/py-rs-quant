@@ -1,8 +1,7 @@
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, RwLock};
+use std::collections::{BTreeMap, HashMap};
 
 /// Python module Enums
 #[pyclass]
@@ -225,31 +224,6 @@ impl OrderBatch {
     }
 }
 
-/// Object pool for reducing allocations
-struct ObjectPool<T> {
-    items: VecDeque<T>,
-    max_size: usize,
-}
-
-impl<T> ObjectPool<T> {
-    fn new(max_size: usize) -> Self {
-        ObjectPool {
-            items: VecDeque::with_capacity(max_size / 2),
-            max_size,
-        }
-    }
-
-    fn get(&mut self) -> Option<T> {
-        self.items.pop_front()
-    }
-
-    fn return_item(&mut self, item: T) {
-        if self.items.len() < self.max_size {
-            self.items.push_back(item);
-        }
-    }
-}
-
 /// OrderBook struct with optimized implementation
 #[derive(Debug)]
 pub struct OrderBook {
@@ -267,12 +241,6 @@ pub struct OrderBook {
     // Trades with pre-allocated capacity
     trades: Vec<Trade>,
 
-    // Price level cache (hot price points)
-    price_level_cache: RwLock<HashMap<(bool, i64), Arc<RwLock<PriceLevel>>>>,
-    cache_hits: usize,
-    cache_misses: usize,
-    max_cache_size: usize,
-
     // Reusable vectors for batch operations
     removed_price_levels: Vec<i64>,
 
@@ -284,8 +252,6 @@ pub struct OrderBook {
 pub struct OrderBookStats {
     pub orders_processed: u64,
     pub trades_executed: u64,
-    pub cache_hits: u64,
-    pub cache_misses: u64,
 }
 
 impl OrderBook {
@@ -297,10 +263,6 @@ impl OrderBook {
             next_order_id: 1,
             next_trade_id: 1,
             trades: Vec::with_capacity(1000),
-            price_level_cache: RwLock::new(HashMap::with_capacity(100)),
-            cache_hits: 0,
-            cache_misses: 0,
-            max_cache_size: 100,
             removed_price_levels: Vec::with_capacity(16),
             stats: OrderBookStats::default(),
         }
@@ -496,59 +458,208 @@ impl OrderBook {
     fn process_market_order(&mut self, mut order: Order) {
         match order.side {
             OrderSide::Buy => {
-                self.removed_price_levels.clear();
-                let mut sell_levels_to_process = Vec::new();
-
-                // Collect levels to process
-                for (&price_bits, level) in &self.sell_price_levels {
-                    sell_levels_to_process.push((price_bits, level.clone()));
+                // Collect keys of sell levels to process
+                let mut sell_level_keys: Vec<i64> = Vec::new();
+                for (&price_bits, _level) in &self.sell_price_levels {
+                    sell_level_keys.push(price_bits);
+                    // Optimization: If market order is already filled, no need to check further levels
                     if order.remaining_quantity <= 0.0 {
                         break;
                     }
                 }
 
-                // Process each level
-                for (price_bits, mut level) in sell_levels_to_process {
+                let mut levels_to_remove = Vec::new();
+
+                // Process each level by key
+                for price_bits in sell_level_keys {
                     if order.remaining_quantity <= 0.0 {
-                        break;
+                        break; // Stop if the order is filled
                     }
 
-                    self.match_order_with_level(&mut order, &mut level);
+                    // Perform the matching - extract orders to be processed from the level
+                    if let Some(level) = self.sell_price_levels.get_mut(&price_bits) {
+                        // Extract orders to process
+                        let mut orders_to_process = std::mem::take(&mut level.orders);
+                        let price = level.price;
 
-                    // Update the actual level in the book
-                    if level.is_empty() {
-                        self.sell_price_levels.remove(&price_bits);
-                    } else {
-                        self.sell_price_levels.insert(price_bits, level);
+                        // Match orders
+                        let mut orders_to_keep = Vec::new();
+                        for mut sell_order in orders_to_process {
+                            if order.remaining_quantity <= 0.0 {
+                                // No more quantity to fill, keep the remaining orders
+                                orders_to_keep.push(sell_order);
+                                continue;
+                            }
+
+                            // Calculate trade quantity
+                            let trade_qty =
+                                order.remaining_quantity.min(sell_order.remaining_quantity);
+
+                            if trade_qty > 0.0 {
+                                // Record the trade - INLINE execution logic
+                                // Update filled quantities
+                                order.filled_quantity += trade_qty;
+                                order.remaining_quantity -= trade_qty;
+                                sell_order.filled_quantity += trade_qty;
+                                sell_order.remaining_quantity -= trade_qty;
+
+                                // Update order statuses
+                                if order.filled_quantity >= order.quantity {
+                                    order.status = OrderStatus::Filled;
+                                } else if order.filled_quantity > 0.0 {
+                                    order.status = OrderStatus::PartiallyFilled;
+                                }
+
+                                if sell_order.filled_quantity >= sell_order.quantity {
+                                    sell_order.status = OrderStatus::Filled;
+                                } else if sell_order.filled_quantity > 0.0 {
+                                    sell_order.status = OrderStatus::PartiallyFilled;
+                                }
+
+                                // Record the trade
+                                let symbol =
+                                    order.symbol.clone().or_else(|| sell_order.symbol.clone());
+                                let trade = Trade {
+                                    id: self.next_trade_id,
+                                    buy_order_id: order.id,
+                                    sell_order_id: sell_order.id,
+                                    price,
+                                    quantity: trade_qty,
+                                    timestamp: std::cmp::max(order.timestamp, sell_order.timestamp),
+                                    symbol,
+                                };
+                                self.next_trade_id += 1;
+                                self.trades.push(trade);
+                                self.stats.trades_executed += 1;
+
+                                // Keep partially filled orders
+                                if sell_order.status != OrderStatus::Filled {
+                                    orders_to_keep.push(sell_order);
+                                } else {
+                                    // Remove filled orders from the lookup map
+                                    self.orders_by_id.remove(&sell_order.id);
+                                }
+                            } else {
+                                orders_to_keep.push(sell_order);
+                            }
+                        }
+
+                        // Update the level with remaining orders
+                        level.orders = orders_to_keep;
+                        level.is_dirty = true;
+
+                        // Check if level became empty after matching
+                        if level.is_empty() {
+                            levels_to_remove.push(price_bits);
+                        }
                     }
+                }
+
+                // Remove empty levels after processing
+                for key in levels_to_remove {
+                    self.sell_price_levels.remove(&key);
                 }
             }
             OrderSide::Sell => {
-                self.removed_price_levels.clear();
-                let mut buy_levels_to_process = Vec::new();
-
-                // Collect levels to process
-                for (&price_bits, level) in &self.buy_price_levels {
-                    buy_levels_to_process.push((price_bits, level.clone()));
+                // Collect keys of buy levels to process
+                let mut buy_level_keys: Vec<i64> = Vec::new();
+                for (&price_bits, _level) in &self.buy_price_levels {
+                    buy_level_keys.push(price_bits);
                     if order.remaining_quantity <= 0.0 {
                         break;
                     }
                 }
 
-                // Process each level
-                for (price_bits, mut level) in buy_levels_to_process {
+                let mut levels_to_remove = Vec::new();
+
+                // Process each level by key
+                for price_bits in buy_level_keys {
                     if order.remaining_quantity <= 0.0 {
-                        break;
+                        break; // Stop if the order is filled
                     }
 
-                    self.match_level_with_order(&mut level, &mut order);
+                    // Perform the matching - extract orders to be processed from the level
+                    if let Some(level) = self.buy_price_levels.get_mut(&price_bits) {
+                        // Extract orders to process
+                        let mut orders_to_process = std::mem::take(&mut level.orders);
+                        let price = level.price;
 
-                    // Update the actual level in the book
-                    if level.is_empty() {
-                        self.buy_price_levels.remove(&price_bits);
-                    } else {
-                        self.buy_price_levels.insert(price_bits, level);
+                        // Match orders
+                        let mut orders_to_keep = Vec::new();
+                        for mut buy_order in orders_to_process {
+                            if order.remaining_quantity <= 0.0 {
+                                // No more quantity to fill, keep the remaining orders
+                                orders_to_keep.push(buy_order);
+                                continue;
+                            }
+
+                            // Calculate trade quantity
+                            let trade_qty =
+                                buy_order.remaining_quantity.min(order.remaining_quantity);
+
+                            if trade_qty > 0.0 {
+                                // Record the trade - INLINE execution logic
+                                // Update filled quantities
+                                buy_order.filled_quantity += trade_qty;
+                                buy_order.remaining_quantity -= trade_qty;
+                                order.filled_quantity += trade_qty;
+                                order.remaining_quantity -= trade_qty;
+
+                                // Update order statuses
+                                if buy_order.filled_quantity >= buy_order.quantity {
+                                    buy_order.status = OrderStatus::Filled;
+                                } else if buy_order.filled_quantity > 0.0 {
+                                    buy_order.status = OrderStatus::PartiallyFilled;
+                                }
+
+                                if order.filled_quantity >= order.quantity {
+                                    order.status = OrderStatus::Filled;
+                                } else if order.filled_quantity > 0.0 {
+                                    order.status = OrderStatus::PartiallyFilled;
+                                }
+
+                                // Record the trade
+                                let symbol =
+                                    buy_order.symbol.clone().or_else(|| order.symbol.clone());
+                                let trade = Trade {
+                                    id: self.next_trade_id,
+                                    buy_order_id: buy_order.id,
+                                    sell_order_id: order.id,
+                                    price,
+                                    quantity: trade_qty,
+                                    timestamp: std::cmp::max(buy_order.timestamp, order.timestamp),
+                                    symbol,
+                                };
+                                self.next_trade_id += 1;
+                                self.trades.push(trade);
+                                self.stats.trades_executed += 1;
+
+                                // Keep partially filled orders
+                                if buy_order.status != OrderStatus::Filled {
+                                    orders_to_keep.push(buy_order);
+                                } else {
+                                    // Remove filled orders from the lookup map
+                                    self.orders_by_id.remove(&buy_order.id);
+                                }
+                            } else {
+                                orders_to_keep.push(buy_order);
+                            }
+                        }
+
+                        // Update the level with remaining orders
+                        level.orders = orders_to_keep;
+                        level.is_dirty = true;
+
+                        // Check if level became empty after matching
+                        if level.is_empty() {
+                            levels_to_remove.push(price_bits);
+                        }
                     }
+                }
+
+                // Remove empty levels after processing
+                for key in levels_to_remove {
+                    self.buy_price_levels.remove(&key);
                 }
             }
         }
@@ -568,67 +679,213 @@ impl OrderBook {
 
         match order.side {
             OrderSide::Buy => {
-                self.removed_price_levels.clear();
-                let mut sell_levels_to_process = Vec::new();
-
-                // Collect levels to process
-                for (&price_bits, level) in &self.sell_price_levels {
+                // Collect keys of potential matching sell levels
+                let mut sell_level_keys: Vec<i64> = Vec::new();
+                for (&price_bits, _level) in &self.sell_price_levels {
                     let level_price = Self::bits_to_price(price_bits, false);
 
-                    // Stop if sell price is higher than buy price
+                    // Stop if sell price is higher than buy price or order is filled
                     if level_price > price || order.remaining_quantity <= 0.0 {
                         break;
                     }
-
-                    sell_levels_to_process.push((price_bits, level.clone()));
+                    sell_level_keys.push(price_bits);
                 }
 
-                // Process each level
-                for (price_bits, mut level) in sell_levels_to_process {
+                let mut levels_to_remove = Vec::new();
+
+                // Process each potential matching level by key
+                for price_bits in sell_level_keys {
                     if order.remaining_quantity <= 0.0 {
-                        break;
+                        break; // Stop if the order is filled
                     }
 
-                    self.match_order_with_level(order, &mut level);
+                    // Perform the matching - extract orders to be processed from the level
+                    if let Some(level) = self.sell_price_levels.get_mut(&price_bits) {
+                        // Extract orders to process
+                        let mut orders_to_process = std::mem::take(&mut level.orders);
+                        let price = level.price;
 
-                    // Update the actual level in the book
-                    if level.is_empty() {
-                        self.sell_price_levels.remove(&price_bits);
-                    } else {
-                        self.sell_price_levels.insert(price_bits, level);
+                        // Match orders
+                        let mut orders_to_keep = Vec::new();
+                        for mut sell_order in orders_to_process {
+                            if order.remaining_quantity <= 0.0 {
+                                // No more quantity to fill, keep the remaining orders
+                                orders_to_keep.push(sell_order);
+                                continue;
+                            }
+
+                            // Calculate trade quantity
+                            let trade_qty =
+                                order.remaining_quantity.min(sell_order.remaining_quantity);
+
+                            if trade_qty > 0.0 {
+                                // Record the trade - INLINE execution logic
+                                // Update filled quantities
+                                order.filled_quantity += trade_qty;
+                                order.remaining_quantity -= trade_qty;
+                                sell_order.filled_quantity += trade_qty;
+                                sell_order.remaining_quantity -= trade_qty;
+
+                                // Update order statuses
+                                if order.filled_quantity >= order.quantity {
+                                    order.status = OrderStatus::Filled;
+                                } else if order.filled_quantity > 0.0 {
+                                    order.status = OrderStatus::PartiallyFilled;
+                                }
+
+                                if sell_order.filled_quantity >= sell_order.quantity {
+                                    sell_order.status = OrderStatus::Filled;
+                                } else if sell_order.filled_quantity > 0.0 {
+                                    sell_order.status = OrderStatus::PartiallyFilled;
+                                }
+
+                                // Record the trade
+                                let symbol =
+                                    order.symbol.clone().or_else(|| sell_order.symbol.clone());
+                                let trade = Trade {
+                                    id: self.next_trade_id,
+                                    buy_order_id: order.id,
+                                    sell_order_id: sell_order.id,
+                                    price,
+                                    quantity: trade_qty,
+                                    timestamp: std::cmp::max(order.timestamp, sell_order.timestamp),
+                                    symbol,
+                                };
+                                self.next_trade_id += 1;
+                                self.trades.push(trade);
+                                self.stats.trades_executed += 1;
+
+                                // Keep partially filled orders
+                                if sell_order.status != OrderStatus::Filled {
+                                    orders_to_keep.push(sell_order);
+                                } else {
+                                    // Remove filled orders from the lookup map
+                                    self.orders_by_id.remove(&sell_order.id);
+                                }
+                            } else {
+                                orders_to_keep.push(sell_order);
+                            }
+                        }
+
+                        // Update the level with remaining orders
+                        level.orders = orders_to_keep;
+                        level.is_dirty = true;
+
+                        // Check if level became empty after matching
+                        if level.is_empty() {
+                            levels_to_remove.push(price_bits);
+                        }
                     }
+                }
+
+                // Remove empty levels after processing
+                for key in levels_to_remove {
+                    self.sell_price_levels.remove(&key);
                 }
             }
             OrderSide::Sell => {
-                self.removed_price_levels.clear();
-                let mut buy_levels_to_process = Vec::new();
-
-                // Collect levels to process
-                for (&price_bits, level) in &self.buy_price_levels {
+                // Collect keys of potential matching buy levels
+                let mut buy_level_keys: Vec<i64> = Vec::new();
+                for (&price_bits, _level) in &self.buy_price_levels {
                     let level_price = Self::bits_to_price(price_bits, true);
 
-                    // Stop if buy price is lower than sell price
+                    // Stop if buy price is lower than sell price or order is filled
                     if level_price < price || order.remaining_quantity <= 0.0 {
                         break;
                     }
-
-                    buy_levels_to_process.push((price_bits, level.clone()));
+                    buy_level_keys.push(price_bits);
                 }
 
-                // Process each level
-                for (price_bits, mut level) in buy_levels_to_process {
+                let mut levels_to_remove = Vec::new();
+
+                // Process each potential matching level by key
+                for price_bits in buy_level_keys {
                     if order.remaining_quantity <= 0.0 {
-                        break;
+                        break; // Stop if the order is filled
                     }
 
-                    self.match_level_with_order(&mut level, order);
+                    // Perform the matching - extract orders to be processed from the level
+                    if let Some(level) = self.buy_price_levels.get_mut(&price_bits) {
+                        // Extract orders to process
+                        let mut orders_to_process = std::mem::take(&mut level.orders);
+                        let price = level.price;
 
-                    // Update the actual level in the book
-                    if level.is_empty() {
-                        self.buy_price_levels.remove(&price_bits);
-                    } else {
-                        self.buy_price_levels.insert(price_bits, level);
+                        // Match orders
+                        let mut orders_to_keep = Vec::new();
+                        for mut buy_order in orders_to_process {
+                            if order.remaining_quantity <= 0.0 {
+                                // No more quantity to fill, keep the remaining orders
+                                orders_to_keep.push(buy_order);
+                                continue;
+                            }
+
+                            // Calculate trade quantity
+                            let trade_qty =
+                                buy_order.remaining_quantity.min(order.remaining_quantity);
+
+                            if trade_qty > 0.0 {
+                                // Record the trade - INLINE execution logic
+                                // Update filled quantities
+                                buy_order.filled_quantity += trade_qty;
+                                buy_order.remaining_quantity -= trade_qty;
+                                order.filled_quantity += trade_qty;
+                                order.remaining_quantity -= trade_qty;
+
+                                // Update order statuses
+                                if buy_order.filled_quantity >= buy_order.quantity {
+                                    buy_order.status = OrderStatus::Filled;
+                                } else if buy_order.filled_quantity > 0.0 {
+                                    buy_order.status = OrderStatus::PartiallyFilled;
+                                }
+
+                                if order.filled_quantity >= order.quantity {
+                                    order.status = OrderStatus::Filled;
+                                } else if order.filled_quantity > 0.0 {
+                                    order.status = OrderStatus::PartiallyFilled;
+                                }
+
+                                // Record the trade
+                                let symbol =
+                                    buy_order.symbol.clone().or_else(|| order.symbol.clone());
+                                let trade = Trade {
+                                    id: self.next_trade_id,
+                                    buy_order_id: buy_order.id,
+                                    sell_order_id: order.id,
+                                    price,
+                                    quantity: trade_qty,
+                                    timestamp: std::cmp::max(buy_order.timestamp, order.timestamp),
+                                    symbol,
+                                };
+                                self.next_trade_id += 1;
+                                self.trades.push(trade);
+                                self.stats.trades_executed += 1;
+
+                                // Keep partially filled orders
+                                if buy_order.status != OrderStatus::Filled {
+                                    orders_to_keep.push(buy_order);
+                                } else {
+                                    // Remove filled orders from the lookup map
+                                    self.orders_by_id.remove(&buy_order.id);
+                                }
+                            } else {
+                                orders_to_keep.push(buy_order);
+                            }
+                        }
+
+                        // Update the level with remaining orders
+                        level.orders = orders_to_keep;
+                        level.is_dirty = true;
+
+                        // Check if level became empty after matching
+                        if level.is_empty() {
+                            levels_to_remove.push(price_bits);
+                        }
                     }
+                }
+
+                // Remove empty levels after processing
+                for key in levels_to_remove {
+                    self.buy_price_levels.remove(&key);
                 }
             }
         }
@@ -639,127 +896,6 @@ impl OrderBook {
         } else if order.filled_quantity > 0.0 {
             order.status = OrderStatus::PartiallyFilled;
         }
-    }
-
-    fn match_order_with_level(&mut self, buy_order: &mut Order, sell_level: &mut PriceLevel) {
-        let mut orders_to_remove = Vec::new();
-
-        // Match orders in time priority (FIFO)
-        for (i, sell_order) in sell_level.orders.iter_mut().enumerate() {
-            if buy_order.remaining_quantity <= 0.0 {
-                break;
-            }
-
-            // Calculate trade quantity
-            let trade_qty = buy_order
-                .remaining_quantity
-                .min(sell_order.remaining_quantity);
-
-            if trade_qty > 0.0 {
-                // Execute the trade
-                self.execute_trade(buy_order, sell_order, sell_level.price, trade_qty);
-
-                // Mark filled orders for removal
-                if sell_order.status == OrderStatus::Filled {
-                    orders_to_remove.push(i);
-                }
-            }
-        }
-
-        // Remove filled orders in reverse order to maintain correct indices
-        for &i in orders_to_remove.iter().rev() {
-            let order = sell_level.orders.swap_remove(i);
-            self.orders_by_id.remove(&order.id);
-        }
-
-        // Mark level as dirty if orders were removed
-        if !orders_to_remove.is_empty() {
-            sell_level.is_dirty = true;
-        }
-    }
-
-    fn match_level_with_order(&mut self, buy_level: &mut PriceLevel, sell_order: &mut Order) {
-        let mut orders_to_remove = Vec::new();
-
-        // Match orders in time priority (FIFO)
-        for (i, buy_order) in buy_level.orders.iter_mut().enumerate() {
-            if sell_order.remaining_quantity <= 0.0 {
-                break;
-            }
-
-            // Calculate trade quantity
-            let trade_qty = buy_order
-                .remaining_quantity
-                .min(sell_order.remaining_quantity);
-
-            if trade_qty > 0.0 {
-                // Execute the trade
-                self.execute_trade(buy_order, sell_order, buy_level.price, trade_qty);
-
-                // Mark filled orders for removal
-                if buy_order.status == OrderStatus::Filled {
-                    orders_to_remove.push(i);
-                }
-            }
-        }
-
-        // Remove filled orders in reverse order to maintain correct indices
-        for &i in orders_to_remove.iter().rev() {
-            let order = buy_level.orders.swap_remove(i);
-            self.orders_by_id.remove(&order.id);
-        }
-
-        // Mark level as dirty if orders were removed
-        if !orders_to_remove.is_empty() {
-            buy_level.is_dirty = true;
-        }
-    }
-
-    fn execute_trade(
-        &mut self,
-        buy_order: &mut Order,
-        sell_order: &mut Order,
-        price: f64,
-        quantity: f64,
-    ) {
-        // Update filled quantities
-        buy_order.filled_quantity += quantity;
-        buy_order.remaining_quantity -= quantity;
-        sell_order.filled_quantity += quantity;
-        sell_order.remaining_quantity -= quantity;
-
-        // Update order statuses
-        if buy_order.filled_quantity >= buy_order.quantity {
-            buy_order.status = OrderStatus::Filled;
-            // Will be removed from price level when processing is complete
-        } else if buy_order.filled_quantity > 0.0 {
-            buy_order.status = OrderStatus::PartiallyFilled;
-        }
-
-        if sell_order.filled_quantity >= sell_order.quantity {
-            sell_order.status = OrderStatus::Filled;
-            // Will be removed from price level when processing is complete
-        } else if sell_order.filled_quantity > 0.0 {
-            sell_order.status = OrderStatus::PartiallyFilled;
-        }
-
-        // Record the trade
-        let symbol = buy_order
-            .symbol
-            .clone()
-            .or_else(|| sell_order.symbol.clone());
-        let trade = Trade {
-            id: self.next_trade_id,
-            buy_order_id: buy_order.id,
-            sell_order_id: sell_order.id,
-            price,
-            quantity,
-            timestamp: std::cmp::max(buy_order.timestamp, sell_order.timestamp),
-            symbol,
-        };
-        self.next_trade_id += 1;
-        self.trades.push(trade);
-        self.stats.trades_executed += 1;
     }
 
     pub fn cancel_order(&mut self, order_id: u64) -> bool {
@@ -782,23 +918,21 @@ impl OrderBook {
         false
     }
 
-    pub fn get_order_book_snapshot(&self) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+    pub fn get_order_book_snapshot(&mut self) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
         // Get buy side: price level and total quantity
         let mut buy_snapshot = Vec::with_capacity(self.buy_price_levels.len());
-        for (&price_bits, level) in &self.buy_price_levels {
+        for (&price_bits, level) in &mut self.buy_price_levels {
+            // Use mutable ref to update cache
             let price = Self::bits_to_price(price_bits, true);
-            // Calculate total quantity directly without mutating
-            let total_qty = level.orders.iter().map(|o| o.remaining_quantity).sum();
-            buy_snapshot.push((price, total_qty));
+            buy_snapshot.push((price, level.total_quantity())); // Use cached quantity
         }
 
         // Get sell side: price level and total quantity
         let mut sell_snapshot = Vec::with_capacity(self.sell_price_levels.len());
-        for (&price_bits, level) in &self.sell_price_levels {
+        for (&price_bits, level) in &mut self.sell_price_levels {
+            // Use mutable ref to update cache
             let price = Self::bits_to_price(price_bits, false);
-            // Calculate total quantity directly without mutating
-            let total_qty = level.orders.iter().map(|o| o.remaining_quantity).sum();
-            sell_snapshot.push((price, total_qty));
+            sell_snapshot.push((price, level.total_quantity())); // Use cached quantity
         }
 
         // Sort by price (unnecessary but consistent with original)
@@ -808,8 +942,30 @@ impl OrderBook {
         (buy_snapshot, sell_snapshot)
     }
 
-    pub fn get_trades(&self) -> Vec<Trade> {
-        self.trades.clone()
+    pub fn get_trades(&self, limit: Option<usize>) -> PyResult<Vec<PyTrade>> {
+        let trades = if let Some(l) = limit {
+            // Take the last 'l' trades
+            let start_index = self.trades.len().saturating_sub(l);
+            &self.trades[start_index..]
+        } else {
+            // Return all trades (slice of the whole vector)
+            &self.trades[..]
+        };
+
+        let py_trades = trades
+            .iter() // Iterate over the slice, not cloning the Vec
+            .map(|t| PyTrade {
+                id: t.id,
+                buy_order_id: t.buy_order_id,
+                sell_order_id: t.sell_order_id,
+                price: t.price,
+                quantity: t.quantity,
+                timestamp: t.timestamp,
+                symbol: t.symbol.clone(), // Clone symbol String if needed
+            })
+            .collect();
+
+        Ok(py_trades)
     }
 
     pub fn get_statistics(&self) -> OrderBookStats {
@@ -826,10 +982,6 @@ impl Clone for OrderBook {
             next_order_id: self.next_order_id,
             next_trade_id: self.next_trade_id,
             trades: self.trades.clone(),
-            price_level_cache: RwLock::new(HashMap::new()), // Create new empty cache
-            cache_hits: self.cache_hits,
-            cache_misses: self.cache_misses,
-            max_cache_size: self.max_cache_size,
             removed_price_levels: Vec::with_capacity(16),
             stats: self.stats.clone(),
         }
@@ -939,26 +1091,13 @@ impl PyOrderBook {
         Ok(self.order_book.cancel_order(order_id))
     }
 
-    fn get_order_book_snapshot(&self) -> PyResult<(Vec<(f64, f64)>, Vec<(f64, f64)>)> {
+    fn get_order_book_snapshot(&mut self) -> PyResult<(Vec<(f64, f64)>, Vec<(f64, f64)>)> {
         Ok(self.order_book.get_order_book_snapshot())
     }
 
-    fn get_trades(&self) -> PyResult<Vec<PyTrade>> {
-        let trades = self.order_book.get_trades();
-        let py_trades = trades
-            .into_iter()
-            .map(|t| PyTrade {
-                id: t.id,
-                buy_order_id: t.buy_order_id,
-                sell_order_id: t.sell_order_id,
-                price: t.price,
-                quantity: t.quantity,
-                timestamp: t.timestamp,
-                symbol: t.symbol,
-            })
-            .collect();
-
-        Ok(py_trades)
+    #[pyo3(signature = (limit = None))]
+    fn get_trades(&self, limit: Option<usize>) -> PyResult<Vec<PyTrade>> {
+        self.order_book.get_trades(limit)
     }
 }
 
