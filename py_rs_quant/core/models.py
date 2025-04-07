@@ -1,57 +1,9 @@
 """
 Data models for the matching engine.
 """
-import time
-import numpy as np
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List
 
 from py_rs_quant.core.enums import OrderSide, OrderType, OrderStatus
-
-# Struct-like array for ultra-fast quantity operations
-class QuantityArray:
-    """Array-based storage for order quantities to optimize cache locality."""
-    __slots__ = ['data', 'capacity', 'size']
-    
-    def __init__(self, capacity: int = 1024):
-        """Initialize with fixed capacity."""
-        # Use numpy array for SIMD vectorization
-        self.data = np.zeros((capacity, 3), dtype=np.float64)  # [quantity, filled, remaining]
-        self.capacity = capacity
-        self.size = 0
-    
-    def add(self, quantity: float) -> int:
-        """Add a new quantity record and return its index."""
-        if self.size >= self.capacity:
-            self._grow()
-        
-        idx = self.size
-        self.data[idx, 0] = quantity  # Total quantity
-        self.data[idx, 1] = 0.0       # Filled quantity
-        self.data[idx, 2] = quantity  # Remaining quantity
-        self.size += 1
-        return idx
-    
-    def update_filled(self, idx: int, match_qty: float) -> None:
-        """Update filled and remaining quantities after a match."""
-        self.data[idx, 1] += match_qty  # Increase filled
-        self.data[idx, 2] -= match_qty  # Decrease remaining
-    
-    def get_remaining(self, idx: int) -> float:
-        """Get remaining quantity."""
-        return self.data[idx, 2]
-    
-    def get_filled(self, idx: int) -> float:
-        """Get filled quantity."""
-        return self.data[idx, 1]
-    
-    def _grow(self) -> None:
-        """Increase capacity when full."""
-        new_capacity = self.capacity * 2
-        new_data = np.zeros((new_capacity, 3), dtype=np.float64)
-        new_data[:self.size] = self.data[:self.size]
-        self.data = new_data
-        self.capacity = new_capacity
-
 
 class Order:
     """Order model representing a buy or sell order in the order book."""
@@ -179,38 +131,3 @@ class PriceLevel:
         """String representation for debugging."""
         return f"PriceLevel(price={self.price}, orders={len(self.orders)}, qty={self.get_total_quantity()})"
 
-
-class CacheStats:
-    """Statistics for cache performance."""
-    __slots__ = ['hits', 'misses', 'total']
-    
-    def __init__(self):
-        """Initialize cache statistics."""
-        self.hits = 0
-        self.misses = 0
-        self.total = 0
-        
-    def record_hit(self) -> None:
-        """Record a cache hit."""
-        self.hits += 1
-        self.total += 1
-        
-    def record_miss(self) -> None:
-        """Record a cache miss."""
-        self.misses += 1
-        self.total += 1
-        
-    def hit_ratio(self) -> float:
-        """Calculate the cache hit ratio."""
-        if self.total == 0:
-            return 0.0
-        return self.hits / self.total
-    
-    def as_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "hits": self.hits,
-            "misses": self.misses,
-            "total": self.total,
-            "hit_ratio": self.hit_ratio()
-        } 

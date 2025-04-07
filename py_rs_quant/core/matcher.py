@@ -1,14 +1,12 @@
 """
 Core order matching logic for the matching engine.
 """
-from typing import Dict, List, Optional, Tuple, Any
 import logging
 
-from py_rs_quant.core.enums import OrderSide, OrderType, OrderStatus
+from py_rs_quant.core.enums import OrderType, OrderStatus
 from py_rs_quant.core.models import Order, PriceLevel
 from py_rs_quant.core.utils import (
-    min_quantity, update_quantities, calculate_price_level_total, 
-    calculate_match_price, update_order_status
+    min_quantity, update_quantities, update_order_status
 )
 
 logger = logging.getLogger(__name__)
@@ -109,7 +107,7 @@ class Matcher:
                         resting_order.remaining_quantity, OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED)
                     
                     # Execute trade using optimized trade executor
-                    self.trade_executor.execute_trade_optimized(
+                    self.trade_executor.execute_trade(
                         buy_order=order,
                         sell_order=resting_order,
                         price=match_price,
@@ -250,7 +248,7 @@ class Matcher:
                         resting_order.remaining_quantity, OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED)
                     
                     # Execute trade using optimized trade executor
-                    self.trade_executor.execute_trade_optimized(
+                    self.trade_executor.execute_trade(
                         buy_order=resting_order,
                         sell_order=order,
                         price=match_price,

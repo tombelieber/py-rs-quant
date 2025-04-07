@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class OrderProcessor:
     """
     Handles order creation, validation, and lifecycle management.
+    Optimized for high-performance with minimal allocation overhead.
     """
     
     __slots__ = (
@@ -35,6 +36,56 @@ class OrderProcessor:
         self._order_pool = []
         self._max_order_pool_size = 2000
     
+    def create_order(self, 
+                    side: OrderSide, 
+                    order_type: OrderType,
+                    price: Optional[float], 
+                    quantity: float,
+                    timestamp: Optional[int] = None, 
+                    symbol: Optional[str] = None) -> Order:
+        """
+        Create an order object with minimal allocation overhead.
+        
+        Args:
+            side: Buy or sell side
+            order_type: Market or limit order type
+            price: Limit price (None for market orders)
+            quantity: Order quantity
+            timestamp: Optional timestamp (milliseconds since epoch)
+            symbol: Optional trading symbol
+            
+        Returns:
+            The created Order object
+        """
+        order_id = self.next_order_id
+        self.next_order_id += 1
+        ts = timestamp or int(time.time() * 1000)
+        
+        # Only log in debug mode with lazy evaluation
+        if __debug__ and logger.isEnabledFor(logging.DEBUG):
+            order_type_name = order_type.name
+            side_name = side.name
+            price_str = f", price={price}" if price is not None else ""
+            logger.debug(f"Creating {order_type_name} {side_name} order: id={order_id}{price_str}, qty={quantity}, symbol={symbol or ''}")
+        
+        # Create order from pool if available to reduce GC pressure
+        if self._order_pool:
+            order = self._order_pool.pop()
+            order.id = order_id
+            order.side = side
+            order.order_type = order_type
+            order.price = price
+            order.quantity = quantity
+            order.filled_quantity = 0.0
+            order.remaining_quantity = quantity
+            order.status = OrderStatus.NEW
+            order.timestamp = ts
+            order.symbol = symbol
+        else:
+            order = Order(order_id, side, order_type, price, quantity, ts, symbol)
+            
+        return order
+    
     def create_limit_order(self, side: OrderSide, price: float, quantity: float, 
                           timestamp: Optional[int] = None, symbol: Optional[str] = None) -> int:
         """
@@ -50,31 +101,15 @@ class OrderProcessor:
         Returns:
             The order ID
         """
-        # Direct assignment instead of conditionals for performance
-        order_id = self.next_order_id
-        self.next_order_id += 1
-        ts = timestamp or int(time.time() * 1000)
-        
-        # Only log in debug mode with lazy evaluation
-        if __debug__ and logger.isEnabledFor(logging.DEBUG):
-            logger.debug("Adding limit order: id=%d, side=%s, price=%f, qty=%f, symbol=%s", 
-                        order_id, side.name, price, quantity, symbol or '')
-        
-        # Inline order creation for performance
-        if self._order_pool:
-            order = self._order_pool.pop()
-            order.id = order_id
-            order.side = side
-            order.order_type = OrderType.LIMIT
-            order.price = price
-            order.quantity = quantity
-            order.filled_quantity = 0.0
-            order.remaining_quantity = quantity
-            order.status = OrderStatus.NEW
-            order.timestamp = ts
-            order.symbol = symbol
-        else:
-            order = Order(order_id, side, OrderType.LIMIT, price, quantity, ts, symbol)
+        # Create order object
+        order = self.create_order(
+            side=side,
+            order_type=OrderType.LIMIT,
+            price=price,
+            quantity=quantity,
+            timestamp=timestamp,
+            symbol=symbol
+        )
         
         # Process the order through the matcher
         if side == OrderSide.BUY:
@@ -82,7 +117,7 @@ class OrderProcessor:
         else:
             self.matcher.match_sell_order(order)
         
-        return order_id
+        return order.id
     
     def create_market_order(self, side: OrderSide, quantity: float,
                            timestamp: Optional[int] = None, symbol: Optional[str] = None) -> int:
@@ -98,31 +133,15 @@ class OrderProcessor:
         Returns:
             The order ID
         """
-        # Direct assignment instead of conditionals for performance
-        order_id = self.next_order_id
-        self.next_order_id += 1
-        ts = timestamp or int(time.time() * 1000)
-        
-        # Only log in debug mode with lazy evaluation
-        if __debug__ and logger.isEnabledFor(logging.DEBUG):
-            logger.debug("Adding market order: id=%d, side=%s, qty=%f, symbol=%s", 
-                        order_id, side.name, quantity, symbol or '')
-        
-        # Inline order creation for performance
-        if self._order_pool:
-            order = self._order_pool.pop()
-            order.id = order_id
-            order.side = side
-            order.order_type = OrderType.MARKET
-            order.price = None
-            order.quantity = quantity
-            order.filled_quantity = 0.0
-            order.remaining_quantity = quantity
-            order.status = OrderStatus.NEW
-            order.timestamp = ts
-            order.symbol = symbol
-        else:
-            order = Order(order_id, side, OrderType.MARKET, None, quantity, ts, symbol)
+        # Create order object
+        order = self.create_order(
+            side=side,
+            order_type=OrderType.MARKET,
+            price=None,
+            quantity=quantity,
+            timestamp=timestamp,
+            symbol=symbol
+        )
         
         # Process the order through the matcher
         if side == OrderSide.BUY:
@@ -130,7 +149,7 @@ class OrderProcessor:
         else:
             self.matcher.match_sell_order(order)
         
-        return order_id
+        return order.id
     
     def batch_create_orders(self, orders: List[Tuple[OrderSide, OrderType, Optional[float], float, Optional[int], Optional[str]]]) -> List[int]:
         """
@@ -149,29 +168,19 @@ class OrderProcessor:
         current_timestamp = int(time.time() * 1000)
         for side, order_type, price, quantity, timestamp, symbol in orders:
             ts = timestamp if timestamp is not None else current_timestamp
-            order_id = self.next_order_id
-            self.next_order_id += 1
             
-            # Get order from pool or create new
-            if self._order_pool:
-                order = self._order_pool.pop()
-                # Reset order properties
-                order.id = order_id
-                order.side = side
-                order.order_type = order_type
-                order.price = price
-                order.quantity = quantity
-                order.filled_quantity = 0.0
-                order.remaining_quantity = quantity
-                order.status = OrderStatus.NEW
-                order.timestamp = ts
-                order.symbol = symbol
-            else:
-                # Create new if pool is empty
-                order = Order(order_id, side, order_type, price, quantity, ts, symbol)
+            # Create order
+            order = self.create_order(
+                side=side,
+                order_type=order_type,
+                price=price,
+                quantity=quantity,
+                timestamp=ts,
+                symbol=symbol
+            )
                 
             order_objects.append(order)
-            order_ids.append(order_id)
+            order_ids.append(order.id)
         
         # Process each order with optimized methods
         for order in order_objects:
@@ -195,61 +204,33 @@ class OrderProcessor:
         # Get order book from matcher
         order_book = self.matcher.order_book
         
-        # Direct optimization of order cancellation
-        order_dict = order_book.orders_by_id
-        if order_id not in order_dict:
+        # Early exit if order not found
+        if order_id not in order_book.orders_by_id:
             return False
             
-        order = order_dict[order_id]
-        price_map = order_book.order_price_map
+        order = order_book.orders_by_id[order_id]
         
-        # Get the price level
-        price_value = price_map.get(order_id)
-        if price_value is None:
+        # Remove from order book
+        removed_order = order_book.remove_order(order_id)
+        if not removed_order:
             return False
-            
-        # Determine which price level dictionary to use
-        if order.side == OrderSide.BUY:
-            price_levels = order_book.buy_price_levels
-        else:
-            price_levels = order_book.sell_price_levels
-            
-        # Get the price level
-        price_level = price_levels.get(price_value)
-        if not price_level:
-            return False
-            
-        # Find and remove the order
-        for i, o in enumerate(price_level.orders):
-            if o.id == order_id:
-                price_level.orders.pop(i)
-                price_level.is_dirty = True
-                break
-        else:
-            # Order not found in price level
-            return False
-            
-        # Remove from lookup dictionaries
-        del order_dict[order_id]
-        del price_map[order_id]
-        
-        # Check if price level is now empty
-        if not price_level.orders:
-            del price_levels[price_value]
-            
-            # Remove from cache if present
-            cache_key = (id(price_levels), price_value)
-            cache = order_book._price_level_cache
-            if cache_key in cache:
-                del cache[cache_key]
         
         # Update order status and recycle
         order.status = OrderStatus.CANCELLED
-        if len(self._order_pool) < self._max_order_pool_size:
-            self._order_pool.append(order)
+        self._recycle_order(order)
             
         return True
+    
+    def _recycle_order(self, order: Order) -> None:
+        """
+        Return an order to the object pool for reuse.
         
+        Args:
+            order: The order to recycle
+        """
+        if len(self._order_pool) < self._max_order_pool_size:
+            self._order_pool.append(order)
+    
     def get_order_pool_stats(self) -> Dict[str, int]:
         """Get statistics about the order pool."""
         return {

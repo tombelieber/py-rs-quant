@@ -16,12 +16,14 @@ class OrderBook:
     """
     Manages the order book for a single instrument.
     Handles adding and removing orders at price levels.
+    
+    Optimized for high-performance trading with minimal overhead.
     """
     
     __slots__ = (
         'buy_price_levels', 'sell_price_levels', 'orders_by_id', 
         'order_price_map', '_price_level_cache', '_cache_hits', 
-        '_cache_misses', '_max_cache_size', '_orders_to_remove'
+        '_cache_misses', '_max_cache_size'
     )
     
     def __init__(self):
@@ -40,167 +42,63 @@ class OrderBook:
         self._cache_hits = 0
         self._cache_misses = 0
         self._max_cache_size = 100
-        
-        # Reusable arrays for order removal
-        self._orders_to_remove = []
-    
-    def _get_or_create_price_level(self, price_dict: SortedDict, price: float, create_new: bool = True) -> Optional[PriceLevel]:
-        """
-        Get or create a price level with caching for hot price points.
-        
-        Args:
-            price_dict: Dictionary of price levels
-            price: Price to look up
-            create_new: Whether to create a new price level if not found
-            
-        Returns:
-            The price level or None if not found and create_new is False
-        """
-        # Check cache first
-        cache_key = (id(price_dict), price)
-        
-        if cache_key in self._price_level_cache:
-            self._cache_hits += 1
-            return self._price_level_cache[cache_key]
-        
-        self._cache_misses += 1
-        
-        # Not in cache, look in dictionary
-        if price in price_dict:
-            level = price_dict[price]
-        elif create_new:
-            level = PriceLevel(price)
-            price_dict[price] = level
-        else:
-            return None
-        
-        # Add to cache if not full
-        if len(self._price_level_cache) < self._max_cache_size:
-            self._price_level_cache[cache_key] = level
-        
-        return level
-    
-    def _get_price_level_fast(self, price_dict: SortedDict, price: float) -> Optional[PriceLevel]:
-        """
-        Fast path for getting price level without creating new ones.
-        Inlined version of _get_or_create_price_level for performance.
-        """
-        # Direct dictionary lookup without caching overhead
-        return price_dict.get(price)
     
     def add_order(self, order: Order) -> None:
-        """Add an order to the book."""
-        self.orders_by_id[order.id] = order
+        """
+        Add an order to the book with optimized performance.
         
-        if order.side == OrderSide.BUY:
-            neg_price = -order.price  # Negate for correct sorting (highest price first)
-            price_level = self._get_or_create_price_level(self.buy_price_levels, neg_price)
-            price_level.add_order(order)
-            self.order_price_map[order.id] = neg_price
-        else:  # SELL order
-            price_level = self._get_or_create_price_level(self.sell_price_levels, order.price)
-            price_level.add_order(order)
-            self.order_price_map[order.id] = order.price
-    
-    def add_order_fast(self, order: Order) -> None:
-        """Fast path for adding an order with minimal overhead."""
+        Args:
+            order: The order to add
+        """
         # Add to lookup maps
         self.orders_by_id[order.id] = order
         
         if order.side == OrderSide.BUY:
-            neg_price = -order.price
+            neg_price = -order.price  # Negate for correct sorting (highest price first)
             price_dict = self.buy_price_levels
             
-            # Try direct dictionary lookup first
+            # Direct dictionary lookup with conditional price level creation
             if neg_price in price_dict:
                 price_level = price_dict[neg_price]
             else:
-                # Create new price level if needed
+                # Create new price level
                 price_level = PriceLevel(neg_price)
                 price_dict[neg_price] = price_level
                 
-                # Add to cache only if we have space (avoiding conditionals)
+                # Cache for frequently accessed price levels
                 cache_key = (id(price_dict), neg_price)
                 if len(self._price_level_cache) < self._max_cache_size:
                     self._price_level_cache[cache_key] = price_level
             
             # Add to price level and price map
-            price_level.add_order(order)
+            price_level.orders.append(order)
+            price_level.total_qty_cache += order.remaining_quantity
             self.order_price_map[order.id] = neg_price
-        else:
+        else:  # SELL order
             price = order.price
             price_dict = self.sell_price_levels
             
-            # Try direct dictionary lookup first
+            # Direct dictionary lookup with conditional price level creation
             if price in price_dict:
                 price_level = price_dict[price]
             else:
-                # Create new price level if needed
+                # Create new price level
                 price_level = PriceLevel(price)
                 price_dict[price] = price_level
                 
-                # Add to cache only if we have space
+                # Cache for frequently accessed price levels
                 cache_key = (id(price_dict), price)
                 if len(self._price_level_cache) < self._max_cache_size:
                     self._price_level_cache[cache_key] = price_level
             
             # Add to price level and price map
-            price_level.add_order(order)
+            price_level.orders.append(order)
+            price_level.total_qty_cache += order.remaining_quantity
             self.order_price_map[order.id] = price
     
     def remove_order(self, order_id: int) -> Optional[Order]:
         """
-        Remove an order from the book.
-        
-        Args:
-            order_id: The ID of the order to remove
-            
-        Returns:
-            The removed order or None if not found
-        """
-        if order_id not in self.orders_by_id or order_id not in self.order_price_map:
-            return None
-            
-        order = self.orders_by_id[order_id]
-        price = self.order_price_map[order_id]
-        
-        # Determine which book to search
-        if order.side == OrderSide.BUY:
-            price_level = self._get_or_create_price_level(self.buy_price_levels, price, create_new=False)
-            if price_level and price_level.remove_order(order_id):
-                # If the price level is now empty, remove it
-                if not price_level.orders:
-                    del self.buy_price_levels[price]
-                    # Also remove from cache
-                    cache_key = (id(self.buy_price_levels), price)
-                    if cache_key in self._price_level_cache:
-                        del self._price_level_cache[cache_key]
-                
-                # Remove from lookups
-                del self.order_price_map[order_id]
-                del self.orders_by_id[order_id]
-                return order
-        else:  # SELL order
-            price_level = self._get_or_create_price_level(self.sell_price_levels, price, create_new=False)
-            if price_level and price_level.remove_order(order_id):
-                # If the price level is now empty, remove it
-                if not price_level.orders:
-                    del self.sell_price_levels[price]
-                    # Also remove from cache
-                    cache_key = (id(self.sell_price_levels), price)
-                    if cache_key in self._price_level_cache:
-                        del self._price_level_cache[cache_key]
-                
-                # Remove from lookups
-                del self.order_price_map[order_id]
-                del self.orders_by_id[order_id]
-                return order
-                
-        return None
-    
-    def remove_order_fast(self, order_id: int) -> Optional[Order]:
-        """
-        Fast path for removing an order with minimal overhead.
+        Remove an order from the book with optimized performance.
         
         Args:
             order_id: The ID of the order to remove
@@ -221,10 +119,10 @@ class OrderBook:
         # Select the right price book based on order side
         if order.side == OrderSide.BUY:
             price_dict = self.buy_price_levels
-            cache_key = (id(price_dict), price)
         else:
             price_dict = self.sell_price_levels
-            cache_key = (id(price_dict), price)
+            
+        cache_key = (id(price_dict), price)
         
         # Get price level directly from dictionary
         price_level = price_dict.get(price)
@@ -255,18 +153,6 @@ class OrderBook:
         
         return order
     
-    def get_best_bid(self) -> Optional[float]:
-        """Get the best bid price."""
-        if not self.buy_price_levels:
-            return None
-        return -self.buy_price_levels.keys()[0]  # Convert back to positive
-    
-    def get_best_ask(self) -> Optional[float]:
-        """Get the best ask price."""
-        if not self.sell_price_levels:
-            return None
-        return self.sell_price_levels.keys()[0]
-    
     def get_order(self, order_id: int) -> Optional[Order]:
         """Get an order by its ID."""
         return self.orders_by_id.get(order_id)
@@ -275,12 +161,14 @@ class OrderBook:
         """Get all orders at a specific price level."""
         if side == OrderSide.BUY:
             neg_price = -price
-            price_level = self._get_or_create_price_level(self.buy_price_levels, neg_price, create_new=False)
+            if neg_price in self.buy_price_levels:
+                price_level = self.buy_price_levels[neg_price]
+                return price_level.orders.copy()
         else:
-            price_level = self._get_or_create_price_level(self.sell_price_levels, price, create_new=False)
+            if price in self.sell_price_levels:
+                price_level = self.sell_price_levels[price]
+                return price_level.orders.copy()
             
-        if price_level:
-            return price_level.orders.copy()
         return []
     
     def get_price_levels(self, side: OrderSide) -> List[Tuple[float, float]]:
@@ -295,11 +183,11 @@ class OrderBook:
         if side == OrderSide.BUY:
             for neg_price in self.buy_price_levels:
                 price_level = self.buy_price_levels[neg_price]
-                result.append((-neg_price, price_level.total_quantity()))
+                result.append((-neg_price, price_level.get_total_quantity()))
         else:
             for price in self.sell_price_levels:
                 price_level = self.sell_price_levels[price]
-                result.append((price, price_level.total_quantity()))
+                result.append((price, price_level.get_total_quantity()))
                 
         return result
     
@@ -337,10 +225,6 @@ class OrderBook:
             "mid_price": (sell_levels[0][0] + buy_levels[0][0]) / 2 if sell_levels and buy_levels else None,
             "total_orders": len(self.orders_by_id)
         }
-    
-    def _any_order_matches_symbol(self, orders, symbol):
-        """Check if any order in the list matches the given symbol."""
-        return any(order.symbol == symbol for order in orders if order.symbol is not None)
     
     def clear_caches(self) -> None:
         """

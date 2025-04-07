@@ -27,7 +27,7 @@ class MatchingEngine:
     
     __slots__ = (
         'order_book', 'trade_executor', 'statistics', 'matcher', 'order_processor',
-        '_order_pool', '_trade_pool', '_max_trade_pool_size'
+        '_trade_pool', '_max_trade_pool_size'
     )
     
     def __init__(self):
@@ -140,7 +140,7 @@ class MatchingEngine:
         Returns:
             List of executed trades
         """
-        return self.trade_executor.get_executed_trades()
+        return self.trade_executor.get_trades(clear=True)
     
     def clear_caches(self) -> None:
         """
@@ -187,10 +187,14 @@ class MatchingEngine:
             "memory_pools": {
                 "trade_pool_size": len(self._trade_pool),
                 "max_trade_pool_size": self._max_trade_pool_size,
+                "trade_count": len(self.trade_executor.trades),
             }
         }
         
         # Add order processor stats
         stats["memory_pools"].update(self.order_processor.get_order_pool_stats())
+        
+        # Add cache stats from order book
+        stats["cache_stats"] = self.order_book.get_cache_stats()
         
         return stats 
