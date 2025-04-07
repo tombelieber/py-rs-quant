@@ -26,6 +26,7 @@ High-performance order matching engine built with Python and Rust.
 - [What the Latency Measurements Mean](#what-the-latency-measurements-mean)
 - [Real-World Implications](#real-world-implications)
 - [Optimization Techniques](#optimization-techniques)
+- [Current Limitations](#current-limitations)
 - [TODO](#todo)
 - [License](#license)
 
@@ -335,19 +336,112 @@ The following optimizations had the biggest impact on performance:
    - Rust's O(1) removal with swap_remove
    - Advanced caching in Python to compensate for language limitations
 
+## Current Limitations
+
+While the implementations are highly optimized for throughput and latency, several design limitations exist in the current version:
+
+### Design Limitations
+
+1. **Concurrency Model**
+   - Both implementations are currently single-threaded
+   - Orders are processed sequentially rather than in parallel
+   - No lock-free data structures for concurrent access
+
+2. **Data Persistence**
+   - Pure in-memory implementation with no persistence layer
+   - No order/trade history beyond the current session
+   - No support for recovery after crashes
+
+3. **Order Types & Matching Algorithm**
+   - Limited to basic limit and market orders
+   - Only price-time priority matching (no pro-rata or other algorithms)
+   - No support for complex order types (stop, iceberg, etc.)
+   - No cross-order optimization for large batch sizes
+
+### Performance Considerations
+
+1. **Memory Usage**
+   - Rust implementation trades memory for performance in pre-allocated structures
+   - Both implementations keep all orders and price levels in memory
+   - No automatic memory pressure management beyond manual cache clearing
+
+2. **Scaling Limits**
+   - Performance degrades with extremely large order books (millions of price levels)
+   - No automatic sharding or partitioning for distributed workloads
+   - Limited instrumentation for production monitoring and profiling
+
+3. **Real-world Adaptations Needed**
+   - No built-in circuit breakers or throttling mechanisms
+   - Limited risk management capabilities
+   - No handling of exchange-specific protocols or networking code
+
+These limitations inform our roadmap for future improvements beyond those already mentioned in the TODO section.
+
 ## TODO
 
 This project is under active development. Here are the planned improvements:
 
-1. **Parallelization Performance Testing**
+### Performance Enhancements
+
+1. **Parallelization**
    - Implement multi-process benchmarking for Python implementation
    - Implement multi-threaded benchmarking for Rust implementation 
-   - Compare scalability across CPU cores
+   - Develop lock-free data structures for concurrent order processing
+   - Measure scaling efficiency across multiple cores
 
-2. **Additional Language Implementations**
+2. **Memory Optimization**
+   - Implement adaptive memory management for large order books
+   - Add configurable memory pressure handling
+   - Optimize data structure memory footprint for price levels
+   - Benchmark memory usage vs performance trade-offs
+
+3. **Cross-Implementation Comparisons**
    - Add Go implementation for comparison
    - Add C++ implementation for comparison
    - Create cross-language performance matrix
+   - Analyze performance characteristics across different workloads
+
+### Functional Enhancements
+
+1. **Advanced Order Types**
+   - Implement stop orders, stop-limit orders
+   - Add iceberg/reserve orders
+   - Support good-till-cancel (GTC) and immediate-or-cancel (IOC) orders
+   - Implement fill-or-kill (FOK) orders
+
+2. **Matching Algorithm Variants**
+   - Add pro-rata matching algorithm
+   - Implement FIFO + pro-rata hybrid models
+   - Support configurable matching algorithms per instrument
+   - Add cross-order optimization for large batch sizes
+
+3. **Data Persistence**
+   - Implement order/trade history storage
+   - Add crash recovery functionality
+   - Create snapshot/restore capabilities
+   - Support event sourcing for order book reconstruction
+
+### Production Readiness
+
+1. **Risk Management**
+   - Implement circuit breakers and throttling mechanisms
+   - Add position limit enforcement
+   - Develop risk checks for order validation
+   - Create anomaly detection for market conditions
+
+2. **Monitoring & Observability**
+   - Add detailed performance metrics collection
+   - Implement real-time monitoring interfaces
+   - Create visualization tools for order book state
+   - Support standard observability frameworks
+
+3. **Distribution & Scaling**
+   - Develop sharding for multi-symbol support
+   - Implement distributed order book partitioning
+   - Create load balancing strategies
+   - Benchmark cloud deployment scenarios
+
+The immediate focus will be on parallelization testing and memory optimization, followed by advanced order type support.
 
 ## License
 
