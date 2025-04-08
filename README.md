@@ -29,6 +29,7 @@ High-Performance Order Matching Engine and Trading Simulator built with Python a
 ## Table of Contents
 
 - [py-rs-quant](#py-rs-quant)
+  - [Project Overview](#project-overview)
   - [Performance Highlights](#performance-highlights)
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
@@ -131,7 +132,7 @@ Key findings:
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/py-rs-quant.git
+git clone https://github.com/tombelieber/py-rs-quant.git
 cd py-rs-quant
 
 # Create virtual environment
